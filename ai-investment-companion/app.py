@@ -38,45 +38,88 @@ _dark = st.session_state.get("dark_mode", False)
 if _dark:
     _bg = "#0f172a"; _card_bg = "#1e293b"; _text = "#e2e8f0"; _border = "#334155"
     _sub_text = "#94a3b8"; _label = "#64748b"
+    _input_bg = "#1e293b"
+    _gd_bg = "#3b2c08"; _gd_border = "#b45309"; _gd_ll = "#fbbf24"; _gd_lv = "#fde68a"
 else:
     _bg = "#ffffff"; _card_bg = "#ffffff"; _text = "#1e293b"; _border = "#e2e8f0"
     _sub_text = "#64748b"; _label = "#64748b"
+    _input_bg = "#ffffff"
+    _gd_bg = "#fffbeb"; _gd_border = "#fbbf24"; _gd_ll = "#92400e"; _gd_lv = "#78350f"
 
 st.markdown(f"""<style>
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&display=swap');
-*{{font-family:'Noto Sans TC',sans-serif!important; font-size:{_fs}!important}}
+*:not([data-testid="stIconMaterial"]):not(.material-symbols-rounded){{font-family:'Noto Sans TC',sans-serif!important; font-size:{_fs}!important}}
+[data-testid="stIconMaterial"],.material-symbols-rounded{{font-family:'Material Symbols Rounded'!important}}
 footer,#MainMenu{{visibility:hidden}}
-.block-container{{padding-top:1rem; background:{_bg}}}
-.stApp{{background:{_bg}}}
-p,li,span,.stMarkdown{{color:{_text}!important}}
+.stApp,.block-container{{background:{_bg}}}
+/* ── 文字全域（深淺模式一致覆蓋）── */
+p,li,span,.stMarkdown,h1,h2,h3,h4,h5,h6,label{{color:{_text}!important}}
+[data-testid="stCaptionContainer"] p{{color:{_sub_text}!important}}
+hr{{border-color:{_border}!important}}
+/* ── 側邊欄 ── */
+section[data-testid="stSidebar"]{{background:{_card_bg};border-right:1px solid {_border}}}
+/* ── Metric ── */
+[data-testid="stMetricValue"]{{color:{_text}!important}}
+[data-testid="stMetricLabel"] p{{color:{_sub_text}!important}}
+/* ── 按鈕：secondary 用主題色，primary 固定深底金字（兩種模式都清楚）── */
+header[data-testid="stHeader"]{{background:{_bg}}}
+header[data-testid="stHeader"] *{{color:{_sub_text}}}
+.stButton button,.stFormSubmitButton button,.stDownloadButton button{{background:{_card_bg};color:{_text};border:1px solid {_border}}}
+.stButton button p,.stFormSubmitButton button p,.stDownloadButton button p{{color:inherit!important}}
+.stButton button[kind="primary"],.stButton button[data-testid="stBaseButton-primary"]{{
+  background:#1e293b;border-color:#fbbf24;color:#fbbf24}}
+.stButton button[kind="primary"] p,.stButton button[data-testid="stBaseButton-primary"] p{{color:#fbbf24!important}}
+/* ── 輸入框 / 下拉選單（含展開的選項清單）── */
+.stTextInput input,.stNumberInput input,.stDateInput input,textarea,
+[data-baseweb="select"]>div{{background:{_input_bg}!important;color:{_text}!important;border-color:{_border}!important}}
+[data-baseweb="select"] div,[data-baseweb="select"] span{{color:{_text}!important}}
+[data-baseweb="popover"] [role="listbox"]{{background:{_card_bg}!important;border:1px solid {_border}}}
+[data-baseweb="popover"] [role="option"],[data-baseweb="popover"] [role="option"] *{{color:{_text}!important}}
+/* ── st.info / st.success / st.warning：底色固定為淺色系，文字一律深色 ── */
+[data-testid="stAlert"] p,[data-testid="stAlert"] span{{color:{_text}!important}}
+/* ── Tabs / Expander ── */
+button[data-baseweb="tab"] p{{color:{_sub_text}!important}}
+button[data-baseweb="tab"][aria-selected="true"] p{{color:{_text}!important}}
+[data-testid="stExpander"] details{{background:{_card_bg};border:1px solid {_border}}}
+/* ── Hero：本身就是固定深底，維持原樣 ── */
 .hero{{text-align:center;padding:1.5rem 1rem 1rem;background:linear-gradient(135deg,#0f172a,#1e293b 60%,#334155);border-radius:16px;margin-bottom:1.3rem;color:#fff;border:1px solid #334155}}
-.hero h1{{font-size:2rem;color:#fbbf24;margin:0;letter-spacing:1px}}
-.hero .sub{{color:#94a3b8;font-size:.9em;margin-top:.3rem}}
+.hero h1,.hero h1 span{{font-size:2rem!important;color:#fbbf24!important;margin:0;letter-spacing:1px}}
+.hero .sub,.hero .sub span{{color:#94a3b8!important}}
+.hero .sub{{font-size:.9em;margin-top:.3rem}}
 .steps{{display:flex;gap:6px;margin-bottom:1.3rem}}
 .sp{{flex:1;text-align:center;padding:.5rem 0;border-radius:20px;font-size:.82em;font-weight:500}}
-.sp.a{{background:#fbbf24;color:#0f172a;font-weight:700;box-shadow:0 2px 8px rgba(251,191,36,.3)}}
-.sp.d{{background:#bbf7d0;color:#14532d}}
-.sp.p{{background:#f1f5f9;color:#94a3b8}}
+.sp.a{{background:#fbbf24;color:#0f172a!important;font-weight:700;box-shadow:0 2px 8px rgba(251,191,36,.3)}}
+.sp.a span,.sp.d span,.sp.p span{{color:inherit!important}}
+.sp.d{{background:#bbf7d0;color:#14532d!important}}
+.sp.p{{background:{('#334155' if _dark else '#f1f5f9')};color:{('#94a3b8' if _dark else '#94a3b8')}!important}}
+/* ── 組合存摺卡片 ── */
 .ldg{{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:1.2rem}}
 .li{{flex:1;min-width:130px;padding:.8rem .7rem;background:{_card_bg};border-radius:10px;border:1px solid {_border};text-align:center}}
-.li.gd{{background:#fffbeb;border-color:#fbbf24}}
-.ll{{font-size:.7em;color:{_label};margin-bottom:3px;text-transform:uppercase;letter-spacing:.5px}}
-.lv{{font-size:1.1em;font-weight:700;color:{_text}}}
-.lv.up{{color:#dc2626}}.lv.dn{{color:#16a34a}}
+.ll{{font-size:.7em;color:{_label}!important;margin-bottom:3px;text-transform:uppercase;letter-spacing:.5px}}
+.lv{{font-size:1.1em;font-weight:700;color:{_text}!important}}
+.lv.up{{color:#dc2626!important}}.lv.dn{{color:#16a34a!important}}
+/* 金色卡片：背景與文字隨模式一起換（修正深色模式白字疊淺金底） */
+.li.gd{{background:{_gd_bg};border-color:{_gd_border}}}
+.li.gd .ll{{color:{_gd_ll}!important}}
+.li.gd .lv{{color:{_gd_lv}!important}}
+/* ── 分位標尺 ── */
 .rail{{margin:.6rem 0 .3rem}}
 .rb{{position:relative;height:8px;background:linear-gradient(to right,#22c55e 0%,#eab308 50%,#ef4444 100%);border-radius:4px;margin:16px 0 6px}}
 .rm{{position:absolute;top:-7px;width:3px;height:22px;border-radius:2px;transform:translateX(-50%)}}
 .rm.n{{background:{('#e2e8f0' if _dark else '#0f172a')}}}.rm.c{{background:#dc2626;opacity:.85}}
-.rl{{display:flex;justify-content:space-between;font-size:.68em;color:{_sub_text}}}
-.rg{{display:flex;gap:10px;font-size:.68em;color:{_sub_text};margin-top:2px}}
-.alrt{{background:#fef2f2;border:1px solid #fecaca;border-left:4px solid #ef4444;border-radius:8px;padding:.7rem 1rem;margin:.4rem 0;font-size:.85em;color:#7f1d1d}}
-.alrt.ec{{background:#fffbeb;border-color:#fde68a;border-left-color:#f59e0b;color:#78350f}}
-.abox{{background:{('#1e293b' if _dark else '#f8fafc')};border-left:4px solid #fbbf24;border-radius:0 10px 10px 0;padding:1.2rem 1.4rem;margin:.8rem 0;line-height:1.85;font-size:.9em;color:{_text};white-space:pre-wrap}}
+.rl{{display:flex;justify-content:space-between;font-size:.68em;color:{_sub_text}!important}}
+.rl span,.rg span{{color:{_sub_text}!important}}
+.rg{{display:flex;gap:10px;font-size:.68em;color:{_sub_text}!important;margin-top:2px}}
+/* ── 警示條：底色固定淺色系，字色固定深色（兩種模式都清楚）── */
+.alrt{{background:#fef2f2;border:1px solid #fecaca;border-left:4px solid #ef4444;border-radius:8px;padding:.7rem 1rem;margin:.4rem 0;font-size:.85em;color:#7f1d1d!important}}
+.alrt.ec{{background:#fffbeb;border-color:#fde68a;border-left-color:#f59e0b;color:#78350f!important}}
+/* ── AI 報告框 ── */
+.abox{{background:{('#1e293b' if _dark else '#f8fafc')};border-left:4px solid #fbbf24;border-radius:0 10px 10px 0;padding:1.2rem 1.4rem;margin:.8rem 0;line-height:1.85;font-size:.9em;color:{_text}!important;white-space:pre-wrap}}
 .sc{{background:{_card_bg};border:1px solid {_border};border-radius:12px;padding:1rem;margin-bottom:.8rem}}
-.sc h4{{margin:0 0 .5rem;font-size:1em;color:{_text}}}
+.sc h4{{margin:0 0 .5rem;font-size:1em;color:{_text}!important}}
 .engine-badge{{display:inline-block;padding:2px 8px;border-radius:10px;font-size:.7em;font-weight:600}}
-.engine-badge.aws{{background:#dbeafe;color:#1e40af}}
-.engine-badge.ollama{{background:#fef3c7;color:#92400e}}
+.engine-badge.aws{{background:#dbeafe;color:#1e40af!important}}
+.engine-badge.ollama{{background:#fef3c7;color:#92400e!important}}
 </style>""", unsafe_allow_html=True)
 
 
