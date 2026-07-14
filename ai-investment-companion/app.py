@@ -23,7 +23,7 @@ st.markdown("""
     .step-header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         padding: 0.8rem 1.5rem; border-radius: 10px; color: white; margin-bottom: 1rem; }
     .warn-line { border-left: 4px solid #d5493c; padding: 4px 12px; margin: 6px 0;
-        background: #fdf3f2; border-radius: 4px; }
+        background: #fdf3f2; border-radius: 4px; color: black; }
 </style>
 """, unsafe_allow_html=True)
 
