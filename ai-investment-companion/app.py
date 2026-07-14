@@ -1,442 +1,737 @@
 """
-app.py
-------
-AI 投資樹洞 (AI Investment Companion) - Streamlit 主應用
-三步驟：持股導入 → 組合診斷 → AI 陪伴報告
+app.py - AI 投資樹洞 v5
+升級：雙引擎切換(AWS Bedrock + Ollama)、背景預載AI、氣球金幣特效
+"""
+import streamlit as st
+import streamlit.components.v1 as components
+import pandas as pd
+import threading
+from datetime import datetime
+from data_processor import get_processor
+from llm_service import get_llm_service
+from ocr_service import ocr_parse_image, OCRError
+
+st.set_page_config(page_title="AI 投資樹洞", page_icon="🌳", layout="wide", initial_sidebar_state="expanded")
+
+
+# ══════════ 快取 ══════════
+@st.cache_data(ttl=600)
+def cached_stock_list():
+    p = get_processor()
+    df = p.get_available_stocks()
+    # 格式：代號 名稱 [產業]
+    opts = df.apply(lambda r: f"{r['股票代號']} {r['股票名稱']} [{r['產業']}]", axis=1).tolist()
+    return df, opts
+
+
+@st.cache_data(ttl=30)
+def cached_engine_status():
+    llm = get_llm_service()
+    return llm.get_status()
+
+
+# ══════════ CSS（動態：字體大小 + 黑白模式）══════════
+_fs_map = {"小": "14px", "中": "16px", "大": "18px", "特大": "21px"}
+_fs = _fs_map.get(st.session_state.get("font_size", "中"), "16px")
+_dark = st.session_state.get("dark_mode", False)
+
+if _dark:
+    _bg = "#0f172a"; _card_bg = "#1e293b"; _text = "#e2e8f0"; _border = "#334155"
+    _sub_text = "#94a3b8"; _label = "#64748b"
+else:
+    _bg = "#ffffff"; _card_bg = "#ffffff"; _text = "#1e293b"; _border = "#e2e8f0"
+    _sub_text = "#64748b"; _label = "#64748b"
+
+st.markdown(f"""<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&display=swap');
+*{{font-family:'Noto Sans TC',sans-serif!important; font-size:{_fs}!important}}
+footer,#MainMenu{{visibility:hidden}}
+.block-container{{padding-top:1rem; background:{_bg}}}
+.stApp{{background:{_bg}}}
+p,li,span,.stMarkdown{{color:{_text}!important}}
+.hero{{text-align:center;padding:1.5rem 1rem 1rem;background:linear-gradient(135deg,#0f172a,#1e293b 60%,#334155);border-radius:16px;margin-bottom:1.3rem;color:#fff;border:1px solid #334155}}
+.hero h1{{font-size:2rem;color:#fbbf24;margin:0;letter-spacing:1px}}
+.hero .sub{{color:#94a3b8;font-size:.9em;margin-top:.3rem}}
+.steps{{display:flex;gap:6px;margin-bottom:1.3rem}}
+.sp{{flex:1;text-align:center;padding:.5rem 0;border-radius:20px;font-size:.82em;font-weight:500}}
+.sp.a{{background:#fbbf24;color:#0f172a;font-weight:700;box-shadow:0 2px 8px rgba(251,191,36,.3)}}
+.sp.d{{background:#bbf7d0;color:#14532d}}
+.sp.p{{background:#f1f5f9;color:#94a3b8}}
+.ldg{{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:1.2rem}}
+.li{{flex:1;min-width:130px;padding:.8rem .7rem;background:{_card_bg};border-radius:10px;border:1px solid {_border};text-align:center}}
+.li.gd{{background:#fffbeb;border-color:#fbbf24}}
+.ll{{font-size:.7em;color:{_label};margin-bottom:3px;text-transform:uppercase;letter-spacing:.5px}}
+.lv{{font-size:1.1em;font-weight:700;color:{_text}}}
+.lv.up{{color:#dc2626}}.lv.dn{{color:#16a34a}}
+.rail{{margin:.6rem 0 .3rem}}
+.rb{{position:relative;height:8px;background:linear-gradient(to right,#22c55e 0%,#eab308 50%,#ef4444 100%);border-radius:4px;margin:16px 0 6px}}
+.rm{{position:absolute;top:-7px;width:3px;height:22px;border-radius:2px;transform:translateX(-50%)}}
+.rm.n{{background:{('#e2e8f0' if _dark else '#0f172a')}}}.rm.c{{background:#dc2626;opacity:.85}}
+.rl{{display:flex;justify-content:space-between;font-size:.68em;color:{_sub_text}}}
+.rg{{display:flex;gap:10px;font-size:.68em;color:{_sub_text};margin-top:2px}}
+.alrt{{background:#fef2f2;border:1px solid #fecaca;border-left:4px solid #ef4444;border-radius:8px;padding:.7rem 1rem;margin:.4rem 0;font-size:.85em;color:#7f1d1d}}
+.alrt.ec{{background:#fffbeb;border-color:#fde68a;border-left-color:#f59e0b;color:#78350f}}
+.abox{{background:{('#1e293b' if _dark else '#f8fafc')};border-left:4px solid #fbbf24;border-radius:0 10px 10px 0;padding:1.2rem 1.4rem;margin:.8rem 0;line-height:1.85;font-size:.9em;color:{_text};white-space:pre-wrap}}
+.sc{{background:{_card_bg};border:1px solid {_border};border-radius:12px;padding:1rem;margin-bottom:.8rem}}
+.sc h4{{margin:0 0 .5rem;font-size:1em;color:{_text}}}
+.engine-badge{{display:inline-block;padding:2px 8px;border-radius:10px;font-size:.7em;font-weight:600}}
+.engine-badge.aws{{background:#dbeafe;color:#1e40af}}
+.engine-badge.ollama{{background:#fef3c7;color:#92400e}}
+</style>""", unsafe_allow_html=True)
+
+
+# ══════════ 氣球金幣特效 ══════════
+BALLOON_COIN_HTML = """
+<div id="balloon-game" style="position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:9999;pointer-events:all;cursor:crosshair;">
+<canvas id="bc-canvas" style="width:100%;height:100%;"></canvas>
+</div>
+<script>
+(function(){
+const canvas = document.getElementById('bc-canvas');
+const ctx = canvas.getContext('2d');
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+
+const balloons = [];
+const coins = [];
+const colors = ['#ef4444','#f59e0b','#3b82f6','#8b5cf6','#ec4899','#10b981'];
+
+// 生成氣球
+for(let i=0;i<12;i++){
+    balloons.push({
+        x: Math.random()*canvas.width,
+        y: canvas.height + Math.random()*200 + 50,
+        r: 28 + Math.random()*18,
+        color: colors[Math.floor(Math.random()*colors.length)],
+        speed: 1.2 + Math.random()*1.5,
+        wobble: Math.random()*Math.PI*2,
+        alive: true
+    });
+}
+
+// 點擊爆破
+canvas.addEventListener('click', function(e){
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    balloons.forEach(b => {
+        if(!b.alive) return;
+        const dx = mx - b.x, dy = my - b.y;
+        if(dx*dx+dy*dy < b.r*b.r*1.5){
+            b.alive = false;
+            // 噴出金幣
+            for(let j=0;j<6;j++){
+                coins.push({
+                    x: b.x, y: b.y,
+                    vx: (Math.random()-0.5)*8,
+                    vy: -Math.random()*6 - 2,
+                    size: 10+Math.random()*8,
+                    rotation: Math.random()*360,
+                    alpha: 1,
+                    gravity: 0.3
+                });
+            }
+        }
+    });
+});
+
+function drawBalloon(b){
+    ctx.beginPath();
+    ctx.ellipse(b.x, b.y, b.r*0.8, b.r, 0, 0, Math.PI*2);
+    ctx.fillStyle = b.color;
+    ctx.fill();
+    // 光澤
+    ctx.beginPath();
+    ctx.ellipse(b.x-b.r*0.25, b.y-b.r*0.3, b.r*0.2, b.r*0.3, -0.5, 0, Math.PI*2);
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.fill();
+    // 繩子
+    ctx.beginPath();
+    ctx.moveTo(b.x, b.y+b.r);
+    ctx.lineTo(b.x+Math.sin(b.wobble)*5, b.y+b.r+25);
+    ctx.strokeStyle = '#666';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+}
+
+function drawCoin(c){
+    ctx.save();
+    ctx.translate(c.x, c.y);
+    ctx.rotate(c.rotation*Math.PI/180);
+    ctx.globalAlpha = c.alpha;
+    ctx.beginPath();
+    ctx.arc(0, 0, c.size, 0, Math.PI*2);
+    ctx.fillStyle = '#fbbf24';
+    ctx.fill();
+    ctx.strokeStyle = '#d97706';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    // $ 符號
+    ctx.fillStyle = '#92400e';
+    ctx.font = `bold ${c.size}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('$', 0, 1);
+    ctx.restore();
+}
+
+let frame = 0;
+function animate(){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    let anyAlive = false;
+
+    balloons.forEach(b => {
+        if(!b.alive) return;
+        anyAlive = true;
+        b.y -= b.speed;
+        b.wobble += 0.03;
+        b.x += Math.sin(b.wobble)*0.8;
+        drawBalloon(b);
+    });
+
+    coins.forEach(c => {
+        c.x += c.vx;
+        c.y += c.vy;
+        c.vy += c.gravity;
+        c.rotation += 5;
+        c.alpha -= 0.012;
+        if(c.alpha > 0) drawCoin(c);
+    });
+
+    frame++;
+    // 8秒後或全部破完+金幣消失 → 移除
+    if(frame > 480 || (!anyAlive && coins.every(c=>c.alpha<=0))){
+        canvas.parentElement.remove();
+        return;
+    }
+    requestAnimationFrame(animate);
+}
+animate();
+})();
+</script>
 """
 
-import streamlit as st
-import pandas as pd
-import re
-from datetime import datetime
-from data_processor import get_processor, MKT_0050_RETURN
-from bedrock_service import get_bedrock_service
 
-st.set_page_config(
-    page_title="AI 投資樹洞 | AI Investment Companion",
-    page_icon="🌳", layout="wide", initial_sidebar_state="collapsed",
-)
-
-st.markdown("""
-<style>
-    .main-header { text-align: center; padding: 1rem 0; }
-    .step-header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 0.8rem 1.5rem; border-radius: 10px; color: white; margin-bottom: 1rem; }
-    .warn-line { border-left: 4px solid #d5493c; padding: 4px 12px; margin: 6px 0;
-        background: #fdf3f2; border-radius: 4px; color: black; }
-</style>
-""", unsafe_allow_html=True)
+# ══════════ 工具函式 ══════════
+def mk_rail(yl, yh, now_p, cost_p):
+    if yl is None or yh is None:
+        return ""
+    n = max(0, min(100, now_p)) if now_p is not None else None
+    c = max(0, min(100, cost_p)) if cost_p is not None else None
+    markers = ""
+    if n is not None:
+        markers += f'<div class="rm n" style="left:{n}%"></div>'
+    if c is not None:
+        markers += f'<div class="rm c" style="left:{c}%"></div>'
+    nl = f"{now_p:.0f}%" if now_p is not None else "—"
+    cl = f"{cost_p:.0f}%" if cost_p is not None else "—"
+    return (f'<div class="rail"><div class="rb">{markers}</div>'
+            f'<div class="rl"><span>${yl:.1f}</span><span>${yh:.1f}</span></div>'
+            f'<div class="rg"><span>■ 現價 {nl}</span>'
+            f'<span style="color:#dc2626">■ 成本 {cl}</span></div></div>')
 
 
-def init_session_state():
-    defaults = {
-        "current_step": 1,
-        "holdings": [],          # [{stock_id, cost, shares, buy_date}]
-        "portfolio_context": None,
-        "ai_report": None,       # AI 診斷快取（避免 rerun 重打 Bedrock）
-        "ocr_result": None,      # OCR 結果暫存（修正巢狀按鈕 bug）
-        "statement_result": None,
-    }
-    for key, val in defaults.items():
+def fmoney(v):
+    if v is None or v == 0:
+        return "—"
+    if abs(v) >= 1e8:
+        return f"${v/1e8:.1f}億"
+    if abs(v) >= 1e4:
+        return f"${v/1e4:.1f}萬"
+    return f"${v:,.0f}"
+
+
+def pcls(v):
+    if v is None:
+        return ""
+    return "up" if v >= 0 else "dn"
+
+
+# ══════════ Session State ══════════
+for _k, _v in [("step", 1), ("holdings", []), ("contexts", []), ("alerts", []),
+               ("engine", "auto"), ("ai_prefetch_done", False), ("show_coins", False),
+               ("font_size", "中"), ("dark_mode", False)]:
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
+
+
+# ══════════ 背景預載 AI ══════════
+def _prefetch_ai_in_background():
+    """
+    在背景 thread 中呼叫 AI，結果寫入 st.session_state。
+    Streamlit 的 session_state 在同一 session 中是 thread-safe 的。
+    """
+    ctxs = st.session_state.get("contexts", [])
+    alerts = st.session_state.get("alerts", [])
+    engine = st.session_state.get("engine", "auto")
+    llm = get_llm_service()
+
+    for ctx in ctxs:
+        key = f"ai_{ctx['股票代號']}"
         if key not in st.session_state:
-            st.session_state[key] = val
+            resp = llm.diagnose(ctx, alerts, engine=engine)
+            st.session_state[key] = resp
+
+    st.session_state["ai_prefetch_done"] = True
 
 
-init_session_state()
+def _start_prefetch_thread():
+    """啟動背景預載（如果還沒跑的話）"""
+    if st.session_state.get("ai_prefetch_done"):
+        return
+    if st.session_state.get("_prefetch_started"):
+        return
+    st.session_state["_prefetch_started"] = True
+    t = threading.Thread(target=_prefetch_ai_in_background, daemon=True)
+    t.start()
 
 
-def invalidate_analysis():
-    """持股變動時清除舊分析與 AI 報告"""
-    st.session_state.portfolio_context = None
-    st.session_state.ai_report = None
-
-
-# ===== OCR 模組 =====
-def ocr_parse(uploaded_image) -> list:
-    """OCR 解析看盤 App 截圖（未安裝 easyocr 時回傳模擬結果）"""
-    try:
-        import easyocr
-        import numpy as np
-        from PIL import Image
-
-        reader = easyocr.Reader(["ch_tra", "en"])
-        img_array = np.array(Image.open(uploaded_image))
-        results = reader.readtext(img_array)
-        full_text = " ".join(r[1] for r in results)
-
-        processor = get_processor()
-        valid_ids = set(processor.get_available_stocks()["股票代號"])
-        # 4~6 位代號（涵蓋 00919 等 ETF），且必須在 300 檔資料庫內
-        found = [c for c in re.findall(r"\b(\d{4,6})\b", full_text) if c in valid_ids]
-        prices = re.findall(r"(\d+\.\d+)", full_text)
-        parsed = []
-        for i, code in enumerate(dict.fromkeys(found)):  # 去重保序
-            parsed.append({
-                "stock_id": code,
-                "cost": float(prices[i]) if i < len(prices) else 0.0,
-                "shares": 1000,
-            })
-        return parsed
-    except ImportError:
-        st.info("📌 EasyOCR 未安裝，使用模擬 OCR 結果展示功能")
-        return [
-            {"stock_id": "00919", "cost": 23.5, "shares": 10000},
-            {"stock_id": "2886", "cost": 42.0, "shares": 3000},
-        ]
-
-
-# ===== 電子對帳單解析 =====
-def parse_statement(uploaded_file) -> list:
-    parsed = []
-    if uploaded_file is None:
-        return parsed
-    file_type = uploaded_file.name.split(".")[-1].lower()
-    try:
-        if file_type == "pdf":
-            try:
-                import pdfplumber
-                with pdfplumber.open(uploaded_file) as pdf:
-                    full_text = "".join(page.extract_text() or "" for page in pdf.pages)
-                for line in full_text.split("\n"):
-                    m = re.search(r"(\d{4,6})\s+\S+\s+(\d[\d,]*)\s+([\d.]+)", line)
-                    if m:
-                        parsed.append({"stock_id": m.group(1),
-                                       "shares": int(m.group(2).replace(",", "")),
-                                       "cost": float(m.group(3))})
-            except ImportError:
-                st.info("📌 pdfplumber 未安裝，使用模擬解析結果")
-                parsed = _mock_statement_result()
-        elif file_type in ("html", "htm"):
-            content = uploaded_file.read().decode("utf-8", errors="ignore")
-            rows = re.findall(
-                r"<td[^>]*>(\d{4,6})</td>\s*<td[^>]*>([^<]+)</td>\s*<td[^>]*>([\d,]+)</td>\s*<td[^>]*>([\d.]+)</td>",
-                content)
-            parsed = [{"stock_id": r[0], "shares": int(r[2].replace(",", "")), "cost": float(r[3])}
-                      for r in rows]
-            if not parsed:
-                st.info("📌 無法從 HTML 解析到持股，使用模擬結果")
-                parsed = _mock_statement_result()
-        else:
-            df = pd.read_csv(uploaded_file)
-            for _, row in df.iterrows():
-                sid = str(row.iloc[0]).strip()
-                if re.match(r"^\d{4,6}$", sid):
-                    parsed.append({"stock_id": sid,
-                                   "shares": int(row.iloc[2]) if len(row) > 2 else 1000,
-                                   "cost": float(row.iloc[3]) if len(row) > 3 else 0})
-    except Exception as e:
-        st.warning(f"解析發生錯誤：{e}，使用模擬資料")
-        parsed = _mock_statement_result()
-    return parsed
-
-
-def _mock_statement_result() -> list:
-    return [
-        {"stock_id": "0056", "cost": 35.5, "shares": 10000},
-        {"stock_id": "00878", "cost": 20.0, "shares": 15000},
-        {"stock_id": "1101", "cost": 38.0, "shares": 2000},
-    ]
-
-
-def add_holdings(items, default_date):
-    valid_ids = set(get_processor().get_available_stocks()["股票代號"])
-    added, skipped = 0, []
-    for item in items:
-        if item["stock_id"] in valid_ids:
-            st.session_state.holdings = [h for h in st.session_state.holdings
-                                         if h["stock_id"] != item["stock_id"]]
-            st.session_state.holdings.append({
-                "stock_id": item["stock_id"], "cost": item["cost"],
-                "shares": item["shares"], "buy_date": default_date})
-            added += 1
-        else:
-            skipped.append(item["stock_id"])
-    invalidate_analysis()
-    return added, skipped
-
-
-# ===== 主介面 =====
+# ══════════ MAIN ══════════
 def main():
-    st.markdown("""
-    <div class="main-header">
-        <h1>🌳 AI 投資樹洞</h1>
-        <p style="font-size: 1.1rem; color: #666;">AI Investment Companion — 你的專屬投資陪伴教練</p>
-        <p style="font-size: 0.9rem; color: #999;">📅 系統時間基準：2025/12/31 ｜ 資料來源：CMoney（300 檔示範籃子）</p>
-    </div>
-    """, unsafe_allow_html=True)
-    st.divider()
-
-    col1, col2, col3 = st.columns(3)
-    steps = ["📥 持股導入", "🔬 組合診斷", "💬 AI 陪伴報告"]
-    for i, (col, step) in enumerate(zip([col1, col2, col3], steps), 1):
-        with col:
-            if i == st.session_state.current_step:
-                st.markdown(f"**➤ 步驟 {i}：{step}**")
-            elif i < st.session_state.current_step:
-                st.markdown(f"✅ 步驟 {i}：{step}")
-            else:
-                st.markdown(f"⬜ 步驟 {i}：{step}")
-    st.divider()
-
-    if st.session_state.current_step == 1:
-        render_step1_input()
-    elif st.session_state.current_step == 2:
-        render_step2_analysis()
+    # 引擎狀態 badge
+    status = cached_engine_status()
+    if status["aws_available"]:
+        engine_label = "☁️ AWS Bedrock"
+        badge_cls = "aws"
+    elif status["ollama_available"]:
+        engine_label = "🖥️ Ollama"
+        badge_cls = "ollama"
     else:
-        render_step3_output()
+        engine_label = "⚠️ 無 AI"
+        badge_cls = "ollama"
+
+    st.markdown(f"""<div class="hero"><h1>🌳 AI 投資樹洞</h1>
+    <div class="sub">敞開庫存，讓 AI 陪你面對每一次波動</div>
+    <div style="font-size:.72rem;color:#6a8caf;margin-top:.3rem">
+    📅 2025/12/31 ｜ <span class="engine-badge {badge_cls}">{engine_label}</span> ｜ 📊 300 檔標的
+    </div></div>""", unsafe_allow_html=True)
+
+    s = st.session_state.step
+    c1 = "d" if s > 1 else ("a" if s == 1 else "p")
+    c2 = "d" if s > 2 else ("a" if s == 2 else "p")
+    c3 = "a" if s == 3 else "p"
+    st.markdown(f"""<div class="steps">
+    <div class="sp {c1}">{"✅" if s>1 else "①"} 持股導入</div>
+    <div class="sp {c2}">{"✅" if s>2 else "②"} 數據分析</div>
+    <div class="sp {c3}">③ AI 診斷</div></div>""", unsafe_allow_html=True)
+
+    [page_input, page_analysis, page_ai][s - 1]()
 
 
-# ===== 步驟 1：持股導入 =====
-def render_step1_input():
-    st.markdown('<div class="step-header"><h3>📥 步驟 1：持股導入與健診入口</h3></div>', unsafe_allow_html=True)
-    st.markdown("選一種方式導入你的真實持股。**輸入一檔就能健診**，不用一次填完。")
-
-    tab1, tab2, tab3 = st.tabs(["✍️ 手動輸入", "📸 截圖 OCR 匯入", "📄 電子對帳單解析"])
+# ══════════ 步驟 1 ══════════
+def page_input():
+    st.markdown("### 📥 導入持股")
+    tab1, tab2 = st.tabs(["✍️ 手動輸入", "📸 截圖 OCR"])
 
     with tab1:
-        processor = get_processor()
-        available_stocks = processor.get_available_stocks()
-# 「代號　名稱（產業）」選項清單：selectbox 內建打字即時過濾（輸入 00 或 兆豐 都能篩）
-        stock_options = (
-            available_stocks["股票代號"] + "　" + available_stocks["股票名稱"]
-            + "（" + available_stocks["產業"].fillna("其他") + "）"
-        ).tolist()
-        with st.form("manual_input_form"):
-            stock_choice = st.selectbox(
-                "股票代號或名稱", stock_options, index=None,
-                placeholder="輸入代號或名稱片段搜尋，例如：00、兆豐、台積",
-                help="打字即時篩選，涵蓋 300 檔示範標的")
-            col1, col2 = st.columns(2)
-            with col1:
-                cost_input = st.number_input("買進成本（元）", min_value=0.0, step=0.1, format="%.2f")
-            with col2:
-                shares_input = st.number_input("持有股數", min_value=0, step=1000, value=1000)
-            buy_date_input = st.date_input("買進日期", value=datetime(2025, 6, 15),
-                                           min_value=datetime(2020, 1, 1),
-                                           max_value=datetime(2025, 12, 31))
-            if st.form_submit_button("➕ 加入持股清單", use_container_width=True):
-                if stock_choice is None:
-                    st.error("請先從清單選擇一檔股票")
-                elif cost_input <= 0:
-                    st.error("請輸入買進成本")
+        _, stock_opts = cached_stock_list()
+        selected = st.selectbox(
+            "🔍 輸入代號或名稱搜尋",
+            options=stock_opts,
+            index=None,
+            placeholder="輸入股票代號或名稱搜尋...",
+            help="支援前綴搜尋，輸入 '00' 列出 ETF，'23' 列出台積電等",
+        )
+
+        with st.form("add_form", clear_on_submit=True):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                cost = st.number_input("買進均價（元）", min_value=0.01, value=50.0, step=1.0, format="%.2f")
+            with c2:
+                shares = st.number_input("股數", min_value=1, value=1000, step=1000)
+            with c3:
+                bdate = st.date_input("買進日期", value=datetime(2025, 6, 15),
+                                      min_value=datetime(2020, 1, 1), max_value=datetime(2025, 12, 31))
+            if st.form_submit_button("➕ 加入持股", use_container_width=True):
+                if selected:
+                    sid = selected.split(" ")[0]
+                    st.session_state.holdings.append({
+                        "stock_id": sid, "cost": cost,
+                        "shares": shares, "buy_date": bdate.strftime("%Y-%m-%d"),
+                    })
+                    st.rerun()
                 else:
-                    stock_id = stock_choice.split("　")[0]
-                    add_holdings(
-                        [{"stock_id": stock_id, "cost": cost_input, "shares": shares_input}],
-                        buy_date_input.strftime("%Y-%m-%d"))
-                    st.success(f"✅ 已加入 {stock_choice}")
+                    st.warning("請先從搜尋框選擇一檔股票")
 
-        with st.expander("🔍 查看資料庫中可用的股票代號"):
-            st.dataframe(available_stocks[["股票代號", "股票名稱", "產業"]],
-                         use_container_width=True, height=300)
-
-    # --- Tab 2: OCR（結果存 session_state，修正巢狀按鈕 bug）---
     with tab2:
-        st.markdown("上傳看盤 App 庫存截圖，AI 自動辨識後**由你確認**再匯入。")
-        uploaded_image = st.file_uploader("上傳庫存截圖", type=["png", "jpg", "jpeg"], key="ocr_upload")
-        if uploaded_image is not None:
-            st.image(uploaded_image, caption="已上傳的截圖", width=400)
-            if st.button("🔍 開始 OCR 辨識", key="ocr_btn"):
-                with st.spinner("正在辨識圖片中的文字..."):
-                    st.session_state.ocr_result = ocr_parse(uploaded_image)
-
-        if st.session_state.ocr_result:
-            st.success(f"✅ 辨識到 {len(st.session_state.ocr_result)} 筆，請確認或修正後匯入")
-            edited = st.data_editor(pd.DataFrame(st.session_state.ocr_result),
-                                    use_container_width=True, key="ocr_editor")
-            if st.button("📥 確認並全部加入", key="ocr_add_all"):
-                added, skipped = add_holdings(edited.to_dict("records"), "2025-06-01")
-                st.session_state.ocr_result = None
-                if skipped:
-                    st.warning(f"已加入 {added} 筆；{', '.join(skipped)} 不在 300 檔資料庫中，已略過")
-                st.rerun()
-
-    # --- Tab 3: 對帳單（同樣改用 session_state）---
-    with tab3:
-        st.markdown("上傳券商電子對帳單（PDF/HTML/CSV），自動解析庫存。")
-        uploaded_statement = st.file_uploader("上傳電子對帳單",
-                                              type=["pdf", "html", "htm", "csv"], key="statement_upload")
-        if uploaded_statement is not None:
-            if st.button("📊 解析對帳單", key="parse_btn"):
-                with st.spinner("正在解析對帳單..."):
-                    st.session_state.statement_result = parse_statement(uploaded_statement)
-
-        if st.session_state.statement_result:
-            st.success(f"✅ 解析到 {len(st.session_state.statement_result)} 筆，請確認後匯入")
-            edited = st.data_editor(pd.DataFrame(st.session_state.statement_result),
-                                    use_container_width=True, key="stmt_editor")
-            if st.button("📥 確認並全部加入", key="statement_add_all"):
-                added, skipped = add_holdings(edited.to_dict("records"), "2025-01-01")
-                st.session_state.statement_result = None
-                if skipped:
-                    st.warning(f"已加入 {added} 筆；{', '.join(skipped)} 不在 300 檔資料庫中，已略過")
-                st.rerun()
-
-    # --- 持股清單 ---
-    st.divider()
-    st.markdown("### 📋 目前持股清單")
-    if st.session_state.holdings:
-        df = pd.DataFrame(st.session_state.holdings)
-        df.columns = ["股票代號", "買進成本", "持有股數", "買進日期"]
-        st.dataframe(df, use_container_width=True)
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("🗑️ 清空持股清單", use_container_width=True):
-                st.session_state.holdings = []
-                invalidate_analysis()
-                st.rerun()
-        with col2:
-            if st.button("🚀 開始 AI 健診", type="primary", use_container_width=True):
-                st.session_state.current_step = 2
-                st.rerun()
-    else:
-        st.info("尚未加入任何持股，請使用上方任一方式導入。")
-
-
-# ===== 步驟 2：組合診斷 =====
-def render_step2_analysis():
-    st.markdown('<div class="step-header"><h3>🔬 步驟 2：組合層數據診斷</h3></div>', unsafe_allow_html=True)
-    holdings = st.session_state.holdings
-    if not holdings:
-        st.warning("沒有持股資料，請返回步驟 1。")
-        if st.button("⬅️ 返回步驟 1"):
-            st.session_state.current_step = 1
-            st.rerun()
-        return
-
-    if st.session_state.portfolio_context is None:
-        with st.spinner("計算含息報酬、買點分位與社群脈動..."):
-            st.session_state.portfolio_context = get_processor().build_portfolio_context(holdings)
-
-    ctx = st.session_state.portfolio_context
-    if ctx is None:
-        st.error("❌ 無法取得任何持股的數據，請確認股票代號。")
-        if st.button("⬅️ 返回步驟 1"):
-            st.session_state.current_step = 1
-            st.rerun()
-        return
-
-    ov = ctx["組合總覽"]
-    st.markdown("#### 📒 組合存摺")
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("總市值", f"{ov['總市值']:,}")
-    c2.metric("帳面報酬", f"{ov['帳面報酬(%)']}%")
-    c3.metric("含息總報酬", f"{ov['含息總報酬(%)']}%",
-              help="帳面 + 2025 年度現金股利，存股族該看的數字")
-    c4.metric("年股息現金流", f"{ov['年股息現金流']:,} 元")
-    c5.metric("同期 0050", f"+{MKT_0050_RETURN}%")
-
-    st.caption(f"產業配置：{'、'.join(f'{k} {v}%' for k, v in ov['產業配置(%)'].items())}"
-               f"｜最大單一持股 {ov['最大單一持股權重(%)']}%")
-
-    if ctx["系統警示"]:
-        st.markdown("#### ⚠️ 系統警示")
-        for w in ctx["系統警示"]:
-            st.markdown(f'<div class="warn-line">{w}</div>', unsafe_allow_html=True)
-
-    st.markdown("#### 📊 逐檔明細")
-    for r in ctx["持股明細"]:
-        with st.expander(f"{r['名稱']} ({r['代號']}) · 佔 {r['權重(%)']}%", expanded=True):
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("帳面損益", f"{r['帳面損益(%)']}%")
-            col2.metric("含息總報酬", f"{r['含息總報酬(%)']}%")
-            col3.metric("成本殖利率", f"{r['成本殖利率(%)']}%")
-            col4.metric("連續配息", f"{r['連續配息年數']} 年" if r["連續配息年數"] else "—")
-            pctl = r["成本買點分位(%)"]
-            pctl_str = pctl if isinstance(pctl, str) else (f"{pctl}%（0=年低 100=年高）" if pctl is not None else "—")
-            st.markdown(f"**成本買點分位：** {pctl_str}　**年內高/低：** {r['年內高低'] or '—'}"
-                        + ("　*(已排除拆分影響)*" if r["含拆分調整"] else ""))
-            p = r["社群30日"]
-            if p:
-                st.markdown(f"**📢 同學會近 30 日：** 發文 {p['近30日發文']:,} 則"
-                            f"（聲量 {p['聲量變化(%)']:+}%）· 看多 {p['看多']} / 看空 {p['看空']}"
-                            f" · 多空比 {p['多空比']}")
-            if r["下次除息日"]:
-                st.markdown(f"**📅 下次除息：** {r['下次除息日']}")
-
-    with st.expander("🧠 AI 理解包（Prompt Context）預覽"):
-        st.json(ctx)
-
-    st.divider()
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("⬅️ 返回修改持股", use_container_width=True):
-            st.session_state.current_step = 1
-            st.rerun()
-    with col2:
-        if st.button("🤖 送出 AI 陪伴診斷", type="primary", use_container_width=True):
-            st.session_state.current_step = 3
-            st.rerun()
-
-
-# ===== 步驟 3：AI 陪伴報告 =====
-def render_step3_output():
-    st.markdown('<div class="step-header"><h3>💬 步驟 3：AI 陪伴診斷報告</h3></div>', unsafe_allow_html=True)
-    ctx = st.session_state.portfolio_context
-    if not ctx:
-        st.warning("沒有分析數據，請返回步驟 1。")
-        if st.button("⬅️ 返回步驟 1"):
-            st.session_state.current_step = 1
-            st.rerun()
-        return
-
-    # AI 診斷結果快取：只在沒有快取時呼叫 Bedrock（一個組合一次呼叫）
-    if st.session_state.ai_report is None:
-        with st.spinner("🌳 AI 投資樹洞正在讀懂你的存摺..."):
-            st.session_state.ai_report = get_bedrock_service().diagnose_portfolio(ctx)
-
-    report = st.session_state.ai_report
-    if report["ok"]:
-        with st.chat_message("assistant", avatar="🌳"):
-            st.markdown(report["text"])
-    else:
-        st.error(f"🚨 AI 診斷失敗，請排除後重試（不會顯示假結果）\n\n{report['error']}")
+        st.caption("上傳看盤 App 庫存截圖，EasyOCR 自動辨識")
+        img = st.file_uploader("　", type=["png", "jpg", "jpeg"], key="ocr_uploader")
+        if img:
+            st.image(img, width=300)
+            if st.button("🔍 OCR 辨識"):
+                with st.spinner("辨識中..."):
+                    try:
+                        res, raw_text = ocr_parse_image(img)
+                        if res:
+                            for r in res:
+                                st.session_state.holdings.append({
+                                    "stock_id": r["stock_id"], "cost": r["cost"],
+                                    "shares": r["shares"], "buy_date": "2025-06-01"})
+                            st.success(f"✅ 辨識到 {len(res)} 筆，已加入持股")
+                            st.rerun()
+                        else:
+                            st.warning("未辨識到股票資訊")
+                            with st.expander("OCR 原始辨識文字"):
+                                st.code(raw_text)
+                    except OCRError as e:
+                        st.error(str(e))
 
     st.markdown("---")
-    st.markdown("### 🛡️ 下一步行動")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        if st.button("🔄 重新產生診斷", use_container_width=True):
-            st.session_state.ai_report = None
-            st.rerun()
-    with col2:
-        if st.button("📥 修改持股", use_container_width=True):
-            st.session_state.current_step = 1
-            st.rerun()
-    with col3:
-        if st.button("🛡️ 開啟持股防護罩（訂閱）", type="primary", use_container_width=True):
-            st.balloons()
-            ex_dates = [f"{r['名稱']} {r['下次除息日']}" for r in ctx["持股明細"] if r["下次除息日"]]
-            st.success("🎉 已開啟持股防護罩，我們會在關鍵時刻通知你。")
-            st.markdown("**你將收到以下警示通知：**\n"
-                        "- 📈 股價突破年度新高/新低時\n"
-                        "- 🏦 法人連續大量買賣超時\n"
-                        "- 💬 社群情緒劇烈變化時\n"
-                        + (f"- 📅 除息提醒：{'、'.join(ex_dates)}" if ex_dates else "- 📅 除息日前 7 天提醒"))
+    _show_holdings()
 
 
-# ===== 側邊欄 =====
-def render_sidebar():
-    with st.sidebar:
-        st.markdown("### ⚙️ 系統資訊")
-        st.markdown("**系統時間基準：** 2025/12/31")
-        st.markdown("**資料來源：** CMoney（300 檔）")
-        st.markdown("**AI 模型：** Claude（Amazon Bedrock）")
-        st.divider()
-        st.markdown("### 📌 使用說明")
-        st.markdown("1. **導入持股** — 手動 / OCR / 對帳單\n"
-                    "2. **組合診斷** — 含息報酬、分位、社群脈動\n"
-                    "3. **AI 報告** — 組合層個人化陪伴")
-        st.divider()
-        st.markdown("### ⚠️ 免責聲明")
-        st.caption("本服務僅提供數據分析與陪伴視角，不構成任何投資建議。投資有風險，決策請自行判斷。")
-        st.divider()
-        if st.button("🔄 重置應用", use_container_width=True):
-            for key in list(st.session_state.keys()):
-                del st.session_state[key]
+def _show_holdings():
+    h = st.session_state.holdings
+    if not h:
+        st.info("👆 請先選擇股票並填入成本與股數")
+        return
+
+    st.markdown(f"**📋 持股清單（{len(h)} 檔）**")
+    p = get_processor()
+    for item in h:
+        s = p.get_stock_summary(item["stock_id"])
+        nm = s["股票名稱"] if s else ""
+        ind = s["產業"] if s else ""
+        st.markdown(f"　`{item['stock_id']}` **{nm}** [{ind}] — ${item['cost']:.2f} × {item['shares']:,} 股")
+
+    c1, c2, c3 = st.columns([1, 1, 2])
+    with c1:
+        if st.button("🗑️ 清空", use_container_width=True):
+            st.session_state.holdings = []
+            st.rerun()
+    with c2:
+        if st.button("↩️ 刪末筆", use_container_width=True):
+            st.session_state.holdings.pop()
+            st.rerun()
+    with c3:
+        if st.button("🚀 開始健診", type="primary", use_container_width=True):
+            # 只做數據計算（快），AI 留給步驟 2 背景跑
+            _compute_contexts()
+            st.session_state.ai_prefetch_done = False
+            st.session_state["_prefetch_started"] = False
+            st.session_state.step = 2
             st.rerun()
 
 
-if __name__ == "__main__":
-    render_sidebar()
-    main()
+def _compute_contexts():
+    """只計算 contexts 和 alerts（不等 AI）"""
+    p = get_processor()
+    ctxs = []
+    for h in st.session_state.holdings:
+        ctx = p.build_ai_context(h["stock_id"], h["cost"], h["shares"], h.get("buy_date", ""))
+        if ctx:
+            ctxs.append(ctx)
+    alerts = p.compute_portfolio_alerts(ctxs) if ctxs else []
+    st.session_state.contexts = ctxs
+    st.session_state.alerts = alerts
+    # 清除舊的 AI 回覆
+    for k in [k for k in st.session_state if k.startswith("ai_")]:
+        del st.session_state[k]
+
+
+# ══════════ 步驟 2 ══════════
+def page_analysis():
+    ctxs = st.session_state.contexts
+    alerts = st.session_state.alerts
+    if not ctxs:
+        st.warning("無持股數據")
+        if st.button("⬅️ 返回"):
+            st.session_state.step = 1
+            st.rerun()
+        return
+
+    # ★ 背景偷跑 AI（使用者一邊看數據，AI 一邊在跑）
+    _start_prefetch_thread()
+
+    # Ledger
+    total_val = sum(c["市值"] for c in ctxs if c["市值"])
+    total_cost = sum(c["買進成本"] * c["持有股數"] for c in ctxs)
+    pnl_pct = round((total_val / total_cost - 1) * 100, 2) if total_cost > 0 else 0
+    total_div = sum(c["年股息現金流"] for c in ctxs if c["年股息現金流"])
+    total_wd = sum((c["收盤價"] + (c["現金股利"] or 0)) * c["持有股數"] for c in ctxs if c["收盤價"])
+    tr_pct = round((total_wd / total_cost - 1) * 100, 2) if total_cost > 0 else 0
+
+    st.markdown(f"""<div class="ldg">
+    <div class="li"><div class="ll">總市值</div><div class="lv">{fmoney(total_val)}</div></div>
+    <div class="li"><div class="ll">帳面報酬</div><div class="lv {pcls(pnl_pct)}">{pnl_pct:+.2f}%</div></div>
+    <div class="li"><div class="ll">含息總報酬</div><div class="lv {pcls(tr_pct)}">{tr_pct:+.2f}%</div></div>
+    <div class="li gd"><div class="ll">年股息現金流</div><div class="lv">{fmoney(total_div)}</div></div>
+    <div class="li"><div class="ll">同期 0050</div><div class="lv up">+36.9%</div></div>
+    </div>""", unsafe_allow_html=True)
+
+    # 警示
+    if alerts:
+        for a in alerts:
+            cls = "ec" if a["type"] == "echo_chamber" else ""
+            st.markdown(f'<div class="alrt {cls}">{a["message"]}</div>', unsafe_allow_html=True)
+        st.markdown("")
+
+    # 個股卡片
+    for ctx in ctxs:
+        _render_stock_card(ctx)
+
+    # 預載狀態提示
+    if st.session_state.get("ai_prefetch_done"):
+        st.caption("✅ AI 診斷已準備完成，可直接查看報告")
+    else:
+        st.caption("⏳ AI 診斷正在背景載入中...")
+
+    # 導航
+    st.markdown("---")
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        if st.button("⬅️ 返回修改", use_container_width=True):
+            st.session_state.step = 1
+            st.rerun()
+    with c2:
+        if st.button("🤖 查看 AI 診斷報告", type="primary", use_container_width=True):
+            st.session_state.step = 3
+            st.rerun()
+
+
+def _render_stock_card(ctx):
+    name = f"{ctx['股票名稱']}（{ctx['股票代號']}）"
+    pnl = ctx["帳面損益"]
+    tr = ctx["含息總報酬"]
+    cy = ctx["成本殖利率"]
+
+    st.markdown(f'<div class="sc"><h4>{name}</h4>', unsafe_allow_html=True)
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1:
+        st.metric("成本", f"${ctx['買進成本']:.2f}")
+    with c2:
+        st.metric("現價", f"${ctx['收盤價']:.2f}" if ctx["收盤價"] else "—")
+    with c3:
+        st.metric("帳面損益", f"{pnl:+.2f}%" if pnl is not None else "—")
+    with c4:
+        st.metric("含息總報酬", f"{tr:+.2f}%" if tr is not None else "—")
+    with c5:
+        st.metric("成本殖利率", f"{cy:.2f}%" if cy else "—")
+
+    html = mk_rail(ctx["年低"], ctx["年高"], ctx["現價分位"], ctx["成本分位"])
+    if html:
+        st.markdown(html, unsafe_allow_html=True)
+
+    sc1, sc2, sc3, sc4 = st.columns(4)
+    with sc1:
+        dy = ctx["連續配息年數"]
+        st.caption(f"🏦 配息 **{int(dy)}** 年" if dy else "🏦 —")
+    with sc2:
+        st.caption(f"💰 年息 **{fmoney(ctx['年股息現金流'])}**")
+    with sc3:
+        r = ctx["多空比"]
+        rd = "—" if r is None else ("全看多🔥" if r == float("inf") else f"{r:.1f}")
+        st.caption(f"📢 多空比 **{rd}**")
+    with sc4:
+        w = ctx.get("持股權重", 0)
+        st.caption(f"⚖️ 佔比 **{w:.0f}%**")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ══════════ 步驟 3 ══════════
+def page_ai():
+    ctxs = st.session_state.contexts
+    alerts = st.session_state.alerts
+    if not ctxs:
+        st.warning("請先完成健診")
+        if st.button("⬅️ 返回"):
+            st.session_state.step = 1
+            st.rerun()
+        return
+
+    # 引擎狀態
+    status = cached_engine_status()
+
+    # ★ 引擎選擇（直接在步驟3讓使用者選）
+    engine_choices = []
+    engine_display = {}
+    if status["aws_available"]:
+        engine_choices.append("aws")
+        engine_display["aws"] = "☁️ AWS Bedrock（雲端，快速高品質）"
+    if status["ollama_available"]:
+        engine_choices.append("ollama")
+        engine_display["ollama"] = "🖥️ Ollama 本地（資料不外洩）"
+
+    if not engine_choices:
+        st.error("⚠️ 無可用 AI 引擎")
+        return
+
+    # 預設引擎
+    current = st.session_state.get("engine_step3", engine_choices[0])
+    if current not in engine_choices:
+        current = engine_choices[0]
+
+    if len(engine_choices) > 1:
+        actual = st.radio(
+            "選擇 AI 引擎",
+            options=engine_choices,
+            format_func=lambda x: engine_display.get(x, x),
+            index=engine_choices.index(current),
+            horizontal=True,
+            key="engine_radio_step3",
+        )
+        if actual != st.session_state.get("engine_step3"):
+            st.session_state["engine_step3"] = actual
+            # 切引擎時清除舊回覆
+            for k in [k for k in st.session_state if k.startswith("ai_")]:
+                del st.session_state[k]
+            st.rerun()
+    else:
+        actual = engine_choices[0]
+        st.session_state["engine_step3"] = actual
+
+    if actual == "aws":
+        st.caption(f"☁️ AWS Bedrock Claude Haiku 4.5（{status['aws_region']}）")
+    else:
+        st.caption(f"🖥️ Ollama {status['ollama_model']}（本地推論，資料不離開電腦）")
+
+    st.markdown("### 🌳 AI 陪伴診斷報告")
+
+    llm = get_llm_service()
+
+    for ctx in ctxs:
+        name = f"{ctx['股票名稱']}（{ctx['股票代號']}）"
+        pnl = ctx["帳面損益"]
+        tr = ctx["含息總報酬"]
+
+        st.markdown(f"#### 🔮 {name}")
+        pstr = f"{pnl:+.2f}%" if pnl is not None else "—"
+        tstr = f"{tr:+.2f}%" if tr is not None else "—"
+        st.markdown(f"成本 **${ctx['買進成本']:.2f}** → 現價 **${ctx['收盤價']:.2f}** ｜ "
+                    f"帳面 **{pstr}** ｜ 含息 **{tstr}**")
+
+        html = mk_rail(ctx["年低"], ctx["年高"], ctx["現價分位"], ctx["成本分位"])
+        if html:
+            st.markdown(html, unsafe_allow_html=True)
+
+        # AI 回覆（優先讀預載結果，沒有則即時跑）
+        key = f"ai_{ctx['股票代號']}"
+        if key not in st.session_state:
+            with st.spinner(f"AI 分析 {ctx['股票名稱']} 中..."):
+                st.session_state[key] = llm.diagnose(ctx, alerts, engine=actual)
+
+        st.markdown(f'<div class="abox">{st.session_state[key]}</div>', unsafe_allow_html=True)
+        st.markdown("")
+
+    # CTA
+    st.markdown("---")
+    st.markdown("""<div style="text-align:center;padding:1.3rem;
+    background:linear-gradient(135deg,#0f172a,#1e293b);border-radius:12px;color:#fff;margin-bottom:.8rem">
+    <h3 style="color:#fbbf24;margin:0 0 .4rem">🛡️ 開啟持股防護罩</h3>
+    <p style="margin:0;font-size:.85rem;color:#94a3b8">買點劇變・法人異常・社群翻轉 → 即時通知</p>
+    </div>""", unsafe_allow_html=True)
+
+    c1, c2, c3 = st.columns([1, 2, 1])
+    with c2:
+        if st.button("🎈 點我訂閱（戳破氣球拿金幣！）", type="primary", use_container_width=True):
+            st.session_state.show_coins = True
+            st.rerun()
+
+    # 氣球金幣特效（可重複觸發）
+    if st.session_state.get("show_coins"):
+        # 加入隨機種子讓每次 HTML 不同，強制重新渲染
+        import random
+        seed = random.randint(0, 999999)
+        balloon_html = BALLOON_COIN_HTML.replace("balloon-game", f"balloon-game-{seed}").replace("bc-canvas", f"bc-canvas-{seed}")
+        components.html(balloon_html, height=600, scrolling=False)
+        st.success("🎉 持股防護罩已啟動！快戳破氣球收集金幣吧！")
+        # 不立即關閉，讓使用者可以再按一次
+        col_a, col_b, col_c = st.columns([1, 1, 1])
+        with col_b:
+            if st.button("🎈 再來一波氣球！", use_container_width=True):
+                # 重新觸發（Streamlit rerun 會重新渲染 HTML component）
+                st.rerun()
+        with col_c:
+            if st.button("✖️ 關閉特效", use_container_width=True):
+                st.session_state.show_coins = False
+                st.rerun()
+
+    st.markdown("")
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("🔄 重新健診", use_container_width=True):
+            for k in [k for k in st.session_state if k.startswith("ai_")]:
+                del st.session_state[k]
+            st.session_state.ai_prefetch_done = False
+            st.session_state["_prefetch_started"] = False
+            st.session_state.step = 1
+            st.rerun()
+    with c2:
+        if st.button("📊 數據總覽", use_container_width=True):
+            st.session_state.step = 2
+            st.rerun()
+
+
+# ══════════ 側邊欄 ══════════
+with st.sidebar:
+    st.markdown("## 🎨 顯示設定")
+
+    # 字體大小
+    font_opts = ["小", "中", "大", "特大"]
+    current_fs = st.session_state.get("font_size", "中")
+    new_fs = st.select_slider("字體大小", options=font_opts, value=current_fs)
+    if new_fs != current_fs:
+        st.session_state.font_size = new_fs
+        st.rerun()
+
+    # 黑白模式
+    dark = st.toggle("🌙 深色模式", value=st.session_state.get("dark_mode", False))
+    if dark != st.session_state.dark_mode:
+        st.session_state.dark_mode = dark
+        st.rerun()
+
+    st.markdown("---")
+    st.markdown("## ⚙️ AI 引擎設定")
+
+    status = cached_engine_status()
+
+    # 引擎選擇
+    engine_options = ["auto"]
+    engine_labels = {"auto": "🔄 自動（優先 AWS）", "aws": "☁️ AWS Bedrock", "ollama": "🖥️ Ollama 本地"}
+    if status["aws_available"]:
+        engine_options.append("aws")
+    if status["ollama_available"]:
+        engine_options.append("ollama")
+
+    current_engine = st.session_state.get("engine", "auto")
+    selected_engine = st.radio(
+        "選擇 AI 引擎",
+        options=engine_options,
+        format_func=lambda x: engine_labels.get(x, x),
+        index=engine_options.index(current_engine) if current_engine in engine_options else 0,
+    )
+    if selected_engine != st.session_state.engine:
+        st.session_state.engine = selected_engine
+        # 清除預載結果（引擎切換需重新生成）
+        for k in [k for k in st.session_state if k.startswith("ai_")]:
+            del st.session_state[k]
+        st.session_state.ai_prefetch_done = False
+        st.session_state["_prefetch_started"] = False
+
+    st.markdown("---")
+    st.markdown("**引擎狀態**")
+    if status["aws_available"]:
+        st.success(f"☁️ AWS Bedrock 可用")
+        st.caption(f"Region: {status['aws_region']}")
+        st.caption(f"Model: Claude Haiku 4.5")
+    else:
+        st.warning("☁️ AWS 未設定（缺少環境變數）")
+
+    if status["ollama_available"]:
+        st.success(f"🖥️ Ollama 可用")
+        st.caption(f"Model: {status['ollama_model']}")
+    else:
+        st.warning("🖥️ Ollama 離線")
+
+    st.markdown("---")
+    st.caption("📅 資料基準 2025/12/31")
+    st.caption("⚠️ 不構成投資建議")
+    st.markdown("---")
+    if st.button("🔄 完全重置"):
+        for k in list(st.session_state.keys()):
+            del st.session_state[k]
+        cached_stock_list.clear()
+        cached_engine_status.clear()
+        st.rerun()
+
+main()
