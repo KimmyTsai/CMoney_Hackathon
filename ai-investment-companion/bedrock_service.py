@@ -14,7 +14,7 @@ from botocore.exceptions import ClientError, NoCredentialsError
 #   export BEDROCK_REGION=us-west-2
 #   export BEDROCK_MODEL_ID=$(aws bedrock list-foundation-models --by-provider anthropic ... 查到的 ID)
 BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "us-west-2")
-MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "REPLACE_WITH_ACTUAL_MODEL_ID")
+MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-6")  # 換成你探測 OK 的
 MAX_TOKENS = 1200
 
 SYSTEM_PROMPT = (
