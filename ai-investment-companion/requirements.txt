@@ -12,6 +12,6 @@ requests==2.32.3
 boto3==1.34.131
 
 # OCR 圖片辨識
-easyocr==1.7.2
+# easyocr==1.7.2
 Pillow==10.4.0
 numpy==1.26.4
