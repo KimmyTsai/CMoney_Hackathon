@@ -33,7 +33,7 @@ def cached_engine_status():
 # ══════════ CSS（動態：字體大小 + 黑白模式）══════════
 _fs_map = {"小": "14px", "中": "16px", "大": "18px", "特大": "21px"}
 _fs = _fs_map.get(st.session_state.get("font_size", "中"), "16px")
-_dark = st.session_state.get("dark_mode", False)
+_dark = st.session_state.get("dark_mode", True)
 
 if _dark:
     _bg = "#0f172a"; _card_bg = "#1e293b"; _text = "#e2e8f0"; _border = "#334155"
@@ -77,6 +77,8 @@ header[data-testid="stHeader"] *{{color:{_sub_text}}}
 [data-baseweb="popover"] [role="option"],[data-baseweb="popover"] [role="option"] *{{color:{_text}!important}}
 /* ── st.info / st.success / st.warning：底色固定為淺色系，文字一律深色 ── */
 [data-testid="stAlert"] p,[data-testid="stAlert"] span{{color:{_text}!important}}
+[data-testid="stToast"]{{background:{_card_bg}!important;border:1px solid {_border}!important}}
+[data-testid="stToast"] p,[data-testid="stToast"] span,[data-testid="stToast"] div{{color:{_text}!important}}
 /* ── Tabs / Expander ── */
 button[data-baseweb="tab"] p{{color:{_sub_text}!important}}
 button[data-baseweb="tab"][aria-selected="true"] p{{color:{_text}!important}}
@@ -126,11 +128,24 @@ button[data-baseweb="tab"][aria-selected="true"] p{{color:{_text}!important}}
 .ins.up{{color:#dc2626!important;font-weight:700}}
 .ins.dn{{color:#16a34a!important;font-weight:700}}
 .ins.gd{{color:#d97706!important;font-weight:700}}
+.ibars{{background:{_card_bg};border:1px solid {_border};border-radius:12px;padding:.9rem 1.1rem}}
+.irow{{display:flex;align-items:center;gap:10px;margin:.35rem 0}}
+.irow .ilabel,.irow .ilabel span{{color:{_text}!important}}
+.irow .ilabel{{flex:0 0 130px;font-size:.85em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+.irow .itrack{{flex:1;height:10px;background:{_border};border-radius:5px;overflow:hidden;display:block}}
+.irow .ifill{{display:block;height:100%;background:linear-gradient(90deg,#fbbf24,#d97706);border-radius:5px}}
+.irow .ipct,.irow .ipct span{{color:{_text}!important}}
+.irow .ipct{{flex:0 0 52px;text-align:right;font-weight:700;font-size:.85em}}
+.irow .imv,.irow .imv span{{color:{_sub_text}!important}}
+.irow .imv{{flex:0 0 100px;text-align:right;font-size:.75em}}
 .hest,.hest span{{color:#d97706!important}}
 .hest{{font-size:.72em;border:1px dashed #d97706;border-radius:8px;padding:1px 7px;margin-left:4px}}
 .hcard .hpeer,.hcard .hpeer span{{color:{_sub_text}!important}}
 .hcard .hpeer{{margin-top:.25rem;font-size:.78em;font-style:italic}}
 .sc h4{{margin:0 0 .5rem;font-size:1em;color:{_text}!important}}
+/* 氣球特效 iframe：固定全螢幕覆蓋層，脫離文件流不佔版面，點擊穿透 */
+[data-testid="stIFrame"]{{position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;
+  z-index:9999!important;pointer-events:none!important;border:0!important;background:transparent!important}}
 .engine-badge{{display:inline-block;padding:2px 8px;border-radius:10px;font-size:.7em;font-weight:600}}
 .engine-badge.aws{{background:#dbeafe;color:#1e40af!important}}
 .engine-badge.ollama{{background:#fef3c7;color:#92400e!important}}
@@ -139,7 +154,7 @@ button[data-baseweb="tab"][aria-selected="true"] p{{color:{_text}!important}}
 
 # ══════════ 氣球金幣特效 ══════════
 BALLOON_COIN_HTML = """
-<div id="balloon-game" style="position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:9999;pointer-events:all;cursor:crosshair;">
+<div id="balloon-game" style="position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:9999;pointer-events:none;">
 <canvas id="bc-canvas" style="width:100%;height:100%;"></canvas>
 </div>
 <script>
@@ -166,30 +181,29 @@ for(let i=0;i<12;i++){
     });
 }
 
-// 點擊爆破
-canvas.addEventListener('click', function(e){
-    const rect = canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
-    balloons.forEach(b => {
-        if(!b.alive) return;
-        const dx = mx - b.x, dy = my - b.y;
-        if(dx*dx+dy*dy < b.r*b.r*1.5){
-            b.alive = false;
-            // 噴出金幣
-            for(let j=0;j<6;j++){
-                coins.push({
-                    x: b.x, y: b.y,
-                    vx: (Math.random()-0.5)*8,
-                    vy: -Math.random()*6 - 2,
-                    size: 10+Math.random()*8,
-                    rotation: Math.random()*360,
-                    alpha: 1,
-                    gravity: 0.3
-                });
-            }
-        }
-    });
+// 自動爆破（特效改為覆蓋層後點擊會穿透到頁面，故氣球升到畫面中改為自動爆開成金幣）
+function pop(b){
+    b.alive = false;
+    for(let j=0;j<6;j++){
+        coins.push({
+            x: b.x, y: b.y,
+            vx: (Math.random()-0.5)*8,
+            vy: -Math.random()*6 - 2,
+            size: 10+Math.random()*8,
+            rotation: Math.random()*360,
+            alpha: 1,
+            gravity: 0.3
+        });
+    }
+}
+setInterval(function(){
+    const alive = balloons.filter(b => b.alive && b.y < canvas.height*0.75);
+    if(alive.length) pop(alive[Math.floor(Math.random()*alive.length)]);
+}, 450);
+// 視窗尺寸變化時同步畫布（覆蓋層以 CSS 撐滿全螢幕）
+window.addEventListener('resize', function(){
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
 });
 
 function drawBalloon(b){
@@ -307,7 +321,7 @@ def pcls(v):
 # ══════════ Session State ══════════
 for _k, _v in [("step", 1), ("holdings", []), ("contexts", []), ("alerts", []),
                ("engine", "auto"), ("ai_prefetch_done", False), ("show_coins", False),
-               ("font_size", "中"), ("dark_mode", False)]:
+               ("font_size", "中"), ("dark_mode", True), ("ocr_records", None)]:
     if _k not in st.session_state:
         st.session_state[_k] = _v
 
@@ -375,6 +389,8 @@ def main():
 
 # ══════════ 步驟 1 ══════════
 def page_input():
+    if st.session_state.get("_added_msg"):
+        st.toast(st.session_state.pop("_added_msg"), icon="✅")
     st.markdown("### 📥 導入持股")
     st.caption("🔒 你的持股僅存在本次瀏覽階段——不綁券商帳號、不上傳雲端、不需註冊，關閉頁面即清除，也可隨時按「清空」。")
     tab1, tab2 = st.tabs(["✍️ 手動輸入", "📸 截圖 OCR"])
@@ -409,36 +425,122 @@ def page_input():
                             st.warning("查無此股價格資料，請手動輸入成本")
                             st.stop()
                         cost, est = avg, True
+                    already = any(x["stock_id"] == sid for x in st.session_state.holdings)
+                    # 同代號覆蓋更新，避免重複持股（重複加入視為修改成本/股數）
+                    st.session_state.holdings = [x for x in st.session_state.holdings
+                                                 if x["stock_id"] != sid]
                     st.session_state.holdings.append({
                         "stock_id": sid, "cost": cost, "cost_estimated": est,
                         "shares": shares, "buy_date": bdate.strftime("%Y-%m-%d"),
                     })
+                    st.session_state["_added_msg"] = (
+                        f"{'已更新' if already else '已加入'} {selected}（${cost:.2f} × {shares:,} 股"
+                        + ("，成本為年均價估算" if est else "") + "）")
                     st.rerun()
                 else:
                     st.warning("請先從搜尋框選擇一檔股票")
 
     with tab2:
-        st.caption("上傳看盤 App 庫存截圖，EasyOCR 自動辨識")
+        st.caption("上傳看盤 App 截圖（庫存頁或對帳單），AI 視覺辨識後由你確認再匯入")
         img = st.file_uploader("　", type=["png", "jpg", "jpeg"], key="ocr_uploader")
         if img:
             st.image(img, width=300)
-            if st.button("🔍 OCR 辨識"):
-                with st.spinner("辨識中..."):
-                    try:
-                        res, raw_text = ocr_parse_image(img)
-                        if res:
-                            for r in res:
-                                st.session_state.holdings.append({
-                                    "stock_id": r["stock_id"], "cost": r["cost"],
-                                    "shares": r["shares"], "buy_date": "2025-06-01"})
-                            st.success(f"✅ 辨識到 {len(res)} 筆，已加入持股")
-                            st.rerun()
-                        else:
-                            st.warning("未辨識到股票資訊")
-                            with st.expander("OCR 原始辨識文字"):
-                                st.code(raw_text)
-                    except OCRError as e:
-                        st.error(str(e))
+            if st.button("🔍 AI 辨識截圖"):
+                with st.spinner("AI 正在讀取截圖..."):
+                    st.session_state.ocr_records = _run_image_extraction(img)
+                    st.rerun()
+
+        if st.session_state.get("ocr_records") is not None:
+            recs, skipped, engine_used = st.session_state.ocr_records
+            if recs:
+                st.success(f"✅ {engine_used} 辨識到 {len(recs)} 筆，可直接修改後匯入（成本留 0 會以年均價估算）")
+                edited = st.data_editor(
+                    pd.DataFrame(recs)[["stock_id", "name", "cost", "shares"]].rename(
+                        columns={"stock_id": "代號", "name": "名稱", "cost": "成本", "shares": "股數"}),
+                    use_container_width=True, key="ocr_editor", num_rows="dynamic")
+                if skipped:
+                    st.warning("以下標的不在 300 檔示範資料庫，已略過：" + "、".join(skipped))
+                if st.button("📥 確認並匯入", type="primary", use_container_width=True):
+                    n = 0
+                    for _, row in edited.iterrows():
+                        sid = str(row["代號"]).strip()
+                        if not sid:
+                            continue
+                        cost = float(row["成本"]) if row["成本"] else 0.0
+                        est = False
+                        if cost <= 0:
+                            avg = get_processor().get_year_avg_price(sid)
+                            if avg is None:
+                                continue
+                            cost, est = avg, True
+                        st.session_state.holdings = [x for x in st.session_state.holdings
+                                                     if x["stock_id"] != sid]
+                        st.session_state.holdings.append({
+                            "stock_id": sid, "cost": cost, "cost_estimated": est,
+                            "shares": int(row["股數"]) if row["股數"] else 1000,
+                            "buy_date": "2025-06-01"})
+                        n += 1
+                    st.session_state.ocr_records = None
+                    st.session_state["_added_msg"] = f"已從截圖匯入 {n} 檔持股"
+                    st.rerun()
+            else:
+                st.warning("未辨識到可對應的股票。" + ("；".join(skipped) if skipped else ""))
+                st.session_state.ocr_records = None
+
+
+def _run_image_extraction(img) -> tuple:
+    """截圖抽取：Bedrock 視覺優先，EasyOCR 備援；名稱/代號對照 300 檔資料庫"""
+    stocks_db = get_processor().get_available_stocks()
+    code_set = set(stocks_db["股票代號"])
+    name_to_code = dict(zip(stocks_db["股票名稱"], stocks_db["股票代號"]))
+
+    def resolve(rec):
+        """把辨識結果對應到資料庫代號：代號直接比對 → 名稱完全相符 → 名稱包含"""
+        sid = rec.get("stock_id")
+        if sid and sid in code_set:
+            return sid
+        nm = (rec.get("name") or "").replace(" ", "")
+        if nm in name_to_code:
+            return name_to_code[nm]
+        for db_name, code in name_to_code.items():
+            if nm and (nm in db_name or db_name in nm):
+                return code
+        return None
+
+    raw, engine_used = [], ""
+    # 1) Bedrock 視覺（主力）
+    llm = get_llm_service()
+    if llm.is_aws_available():
+        try:
+            fmt = "png" if img.name.lower().endswith(".png") else "jpeg"
+            raw = llm.extract_holdings_from_image(img.getvalue(), fmt)
+            engine_used = "☁️ Bedrock 視覺"
+        except Exception as e:
+            st.info(f"Bedrock 視覺辨識失敗（{type(e).__name__}），改用本地 OCR")
+    # 2) EasyOCR 備援
+    if not raw:
+        try:
+            parsed, _ = ocr_parse_image(img)
+            raw = [{"name": "", "stock_id": r["stock_id"],
+                    "shares": r["shares"], "cost": r["cost"]} for r in parsed]
+            engine_used = "🖥️ 本地 OCR"
+        except OCRError:
+            return [], [], engine_used or "辨識"
+
+    records, skipped, seen = [], [], set()
+    for rec in raw:
+        sid = resolve(rec)
+        label = rec.get("name") or rec.get("stock_id") or "?"
+        if sid is None:
+            skipped.append(label)
+            continue
+        if sid in seen:
+            continue
+        seen.add(sid)
+        db_name = stocks_db.loc[stocks_db["股票代號"] == sid, "股票名稱"].iloc[0]
+        records.append({"stock_id": sid, "name": db_name,
+                        "cost": rec.get("cost") or 0.0, "shares": rec.get("shares") or 1000})
+    return records, skipped, engine_used
 
     st.markdown("---")
     _show_holdings()
@@ -499,6 +601,21 @@ def _peer_note(item: dict, s: dict) -> str:
             f"全年落後大盤 {abs(vs_mkt):.0f}%——套牢的不只你，AI 會陪你一起看該怎麼想")
 
 
+def _remove_holding(stock_id: str, name: str):
+    """個別移除持股，並清除所有依賴舊組合的下游快取"""
+    st.session_state.holdings = [x for x in st.session_state.holdings
+                                 if x["stock_id"] != stock_id]
+    st.session_state.contexts = []
+    st.session_state.alerts = []
+    for k in [k for k in st.session_state if k.startswith("ai_")]:
+        del st.session_state[k]
+    st.session_state.ai_prefetch_done = False
+    st.session_state["_prefetch_started"] = False
+    st.session_state.shield_on = False
+    st.session_state.shield_alerts = None
+    st.session_state["_added_msg"] = f"已移除 {stock_id} {name}"
+
+
 def _show_holdings():
     h = st.session_state.holdings
     if not h:
@@ -510,28 +627,32 @@ def _show_holdings():
 
     st.markdown(f"**📋 持股清單（{len(h)} 檔）**")
     p = get_processor()
-    for item in h:
+    for idx, item in enumerate(h):
         s = p.get_stock_summary(item["stock_id"])
         nm = s["股票名稱"] if s else ""
         ind = s["產業"] if s else ""
         insight = _instant_insight(item, s) if s else ""
         est_tag = ' <span class="hest">年均價估算，可修正</span>' if item.get("cost_estimated") else ""
         peer = _peer_note(item, s) if s else ""
-        st.markdown(
-            f'<div class="hcard"><div class="hmain"><code>{item["stock_id"]}</code> '
-            f'<b>{nm}</b> <span class="hind">[{ind}]</span> — ${item["cost"]:.2f}{est_tag} × {item["shares"]:,} 股</div>'
-            + (f'<div class="hins">⚡ {insight}</div>' if insight else "")
-            + (f'<div class="hpeer">🫂 {peer}</div>' if peer else "")
-            + "</div>", unsafe_allow_html=True)
+        col_card, col_del = st.columns([12, 1])
+        with col_card:
+            st.markdown(
+                f'<div class="hcard"><div class="hmain"><code>{item["stock_id"]}</code> '
+                f'<b>{nm}</b> <span class="hind">[{ind}]</span> — ${item["cost"]:.2f}{est_tag} × {item["shares"]:,} 股</div>'
+                + (f'<div class="hins">⚡ {insight}</div>' if insight else "")
+                + (f'<div class="hpeer">🫂 {peer}</div>' if peer else "")
+                + "</div>", unsafe_allow_html=True)
+        with col_del:
+            if st.button("✕", key=f"del_{idx}_{item['stock_id']}", help=f"移除 {nm}", use_container_width=True):
+                _remove_holding(item["stock_id"], nm)
+                st.rerun()
 
-    c1, c2, c3 = st.columns([1, 1, 2])
+    c1, c3 = st.columns([1, 3])
     with c1:
         if st.button("🗑️ 清空", use_container_width=True):
             st.session_state.holdings = []
-            st.rerun()
-    with c2:
-        if st.button("↩️ 刪末筆", use_container_width=True):
-            st.session_state.holdings.pop()
+            st.session_state.contexts = []
+            st.session_state.alerts = []
             st.rerun()
     with c3:
         if st.button("🚀 開始健診", type="primary", use_container_width=True):
@@ -705,12 +826,17 @@ def render_shield_center():
             st.markdown("目前沒有已排定的未來事件。防護罩會在法人籌碼、價格動能或社群情緒出現變化時即時通知你。")
     with tab_replay:
         st.caption("用 2025 全年真實資料回放：如果你年初就開啟防護罩，會在這些時刻收到通知——這就是你回來看一眼的理由。")
+        def _alert_line(a):
+            # 社群情緒是 CMoney 站內行為數據，無對應外部新聞，不掛連結
+            link = "" if a["類型"] == "💬 社群情緒" else f"　[🔎 相關新聞]({_news_link(a)})"
+            return f"**{a['日期']}**　{a['類型']}　{a['訊息']}{link}"
+
         for a in alerts["回放"][:15]:
-            st.markdown(f"**{a['日期']}**　{a['類型']}　{a['訊息']}　[🔎 相關新聞]({_news_link(a)})")
+            st.markdown(_alert_line(a))
         if alerts["總數"] > 15:
             with st.expander(f"查看其餘 {alerts['總數']-15} 則"):
                 for a in alerts["回放"][15:]:
-                    st.markdown(f"**{a['日期']}**　{a['類型']}　{a['訊息']}　[🔎 相關新聞]({_news_link(a)})")
+                    st.markdown(_alert_line(a))
 
 
 # ══════════ 步驟 3 ══════════
@@ -793,6 +919,24 @@ def page_ai():
             st.markdown(html, unsafe_allow_html=True)
         st.markdown("")
 
+    # ── 產業配置（依市值）──
+    total_mv = sum((c.get("收盤價") or 0) * (c.get("持有股數") or 0) for c in ctxs)
+    if total_mv > 0:
+        ind_mv = {}
+        for c in ctxs:
+            mv = (c.get("收盤價") or 0) * (c.get("持有股數") or 0)
+            ind_mv[c.get("產業", "未知")] = ind_mv.get(c.get("產業", "未知"), 0) + mv
+        st.markdown("#### 🧩 產業配置（依目前市值）")
+        rows = ""
+        for ind, mv in sorted(ind_mv.items(), key=lambda x: -x[1]):
+            pct = mv / total_mv * 100
+            rows += (f'<div class="irow"><span class="ilabel">{ind}</span>'
+                     f'<span class="itrack"><span class="ifill" style="width:{pct:.1f}%"></span></span>'
+                     f'<span class="ipct">{pct:.1f}%</span>'
+                     f'<span class="imv">{mv:,.0f} 元</span></div>')
+        st.markdown(f'<div class="ibars">{rows}</div>', unsafe_allow_html=True)
+        st.markdown("")
+
     # ── 組合層 AI 診斷：整個組合一份報告（優先讀預載結果）──
     st.markdown(f"#### 🌳 組合診斷報告（{len(ctxs)} 檔持股綜合分析）")
     if "ai_portfolio" not in st.session_state:
@@ -811,7 +955,7 @@ def page_ai():
 
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
-        if st.button("🎈 點我訂閱（戳破氣球拿金幣！）", type="primary", use_container_width=True):
+        if st.button("🎈 點我訂閱（開啟防護罩慶祝一下！）", type="primary", use_container_width=True):
             st.session_state.show_coins = True
             st.session_state.shield_on = True
             st.rerun()
@@ -822,22 +966,24 @@ def page_ai():
         import random
         seed = random.randint(0, 999999)
         balloon_html = BALLOON_COIN_HTML.replace("balloon-game", f"balloon-game-{seed}").replace("bc-canvas", f"bc-canvas-{seed}")
-        st.success("🎉 持股防護罩已啟動！快戳破氣球收集金幣吧！　⬇️ 你的專屬警示中心已在下方展開")
-        components.html(balloon_html, height=260, scrolling=False)
-        # 不立即關閉，讓使用者可以再按一次
+        st.success("🎉 持股防護罩已啟動！氣球正帶著金幣為你慶祝　⬇️ 你的專屬警示中心已在下方展開")
+        components.html(balloon_html, height=1, scrolling=False)
+
+    # ── 持股防護罩：警示中心（真實資料驅動，事件文字在前）──
+    if st.session_state.get("shield_on"):
+        render_shield_center()
+
+    # 特效控制按鈕固定在頁面最下方
+    if st.session_state.get("show_coins"):
+        st.markdown("---")
         col_a, col_b = st.columns(2)
         with col_a:
             if st.button("🎈 再來一波氣球！", use_container_width=True):
-                # 重新觸發（Streamlit rerun 會重新渲染 HTML component）
                 st.rerun()
         with col_b:
             if st.button("✖️ 關閉特效", use_container_width=True):
                 st.session_state.show_coins = False
                 st.rerun()
-
-    # ── 持股防護罩：警示中心（真實資料驅動）──
-    if st.session_state.get("shield_on"):
-        render_shield_center()
 
     st.markdown("")
     c1, c2 = st.columns(2)
@@ -870,7 +1016,7 @@ with st.sidebar:
         st.rerun()
 
     # 黑白模式
-    dark = st.toggle("🌙 深色模式", value=st.session_state.get("dark_mode", False))
+    dark = st.toggle("🌙 深色模式", value=st.session_state.get("dark_mode", True))
     if dark != st.session_state.dark_mode:
         st.session_state.dark_mode = dark
         st.rerun()

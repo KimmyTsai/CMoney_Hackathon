@@ -141,6 +141,7 @@ class DataProcessor:
             "最近除息日": r.get("最近除息日"),
             "外資持股率": self._sf(r.get("外資持股率(%)")),
             "總市值億": self._sf(r.get("總市值(億)")),
+            "近20日法人買賣超": self._sf(r.get("近20日法人買賣超")),
         }
 
     def get_forum_sentiment(self, stock_id: str) -> dict:
@@ -226,7 +227,20 @@ class DataProcessor:
         # 年高年低
         year_high, year_low = self._get_year_high_low(stock_id)
 
+        # 持有天數（基準日 2025/12/31 − 買進日期）
+        holding_days = None
+        if buy_date:
+            try:
+                from datetime import datetime as _dt
+                holding_days = (_dt(2025, 12, 31) - _dt.strptime(str(buy_date)[:10], "%Y-%m-%d")).days
+            except (ValueError, TypeError):
+                pass
+
         context = {
+            "持有天數": holding_days,
+            "本益比": summary.get("本益比"),
+            "近20日法人買賣超": summary.get("近20日法人買賣超"),
+            "總市值億": summary.get("總市值億"),
             "股票代號": stock_id,
             "股票名稱": summary["股票名稱"],
             "產業": summary["產業"],
@@ -363,8 +377,9 @@ class ShieldEngine:
 
     @staticmethod
     def _fmt(d) -> str:
-        s = str(d)
-        return f"{s[:4]}/{s[4:6]}/{s[6:]}"
+        import re as _re
+        s = _re.sub(r"\D", "", str(d))[:8]  # 相容 20251230 與 2025-12-30 兩種格式
+        return f"{s[:4]}/{s[4:6]}/{s[6:]}" if len(s) == 8 else str(d)
 
     def _stock_name(self, sid: str) -> str:
         row = self.p.wide_table[self.p.wide_table["股票代號"] == sid]
