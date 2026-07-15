@@ -126,6 +126,10 @@ button[data-baseweb="tab"][aria-selected="true"] p{{color:{_text}!important}}
 .ins.up{{color:#dc2626!important;font-weight:700}}
 .ins.dn{{color:#16a34a!important;font-weight:700}}
 .ins.gd{{color:#d97706!important;font-weight:700}}
+.hest,.hest span{{color:#d97706!important}}
+.hest{{font-size:.72em;border:1px dashed #d97706;border-radius:8px;padding:1px 7px;margin-left:4px}}
+.hcard .hpeer,.hcard .hpeer span{{color:{_sub_text}!important}}
+.hcard .hpeer{{margin-top:.25rem;font-size:.78em;font-style:italic}}
 .sc h4{{margin:0 0 .5rem;font-size:1em;color:{_text}!important}}
 .engine-badge{{display:inline-block;padding:2px 8px;border-radius:10px;font-size:.7em;font-weight:600}}
 .engine-badge.aws{{background:#dbeafe;color:#1e40af!important}}
@@ -319,11 +323,8 @@ def _prefetch_ai_in_background():
     engine = st.session_state.get("engine", "auto")
     llm = get_llm_service()
 
-    for ctx in ctxs:
-        key = f"ai_{ctx['股票代號']}"
-        if key not in st.session_state:
-            resp = llm.diagnose(ctx, alerts, engine=engine)
-            st.session_state[key] = resp
+    if ctxs and "ai_portfolio" not in st.session_state:
+        st.session_state["ai_portfolio"] = llm.diagnose_portfolio(ctxs, alerts, engine=engine)
 
     st.session_state["ai_prefetch_done"] = True
 
@@ -391,7 +392,8 @@ def page_input():
         with st.form("add_form", clear_on_submit=True):
             c1, c2, c3 = st.columns(3)
             with c1:
-                cost = st.number_input("買進均價（元）", min_value=0.01, value=50.0, step=1.0, format="%.2f")
+                cost = st.number_input("買進均價（元）｜留 0 = 用年均價估", min_value=0.0, value=0.0, step=1.0,
+                                       format="%.2f", help="不記得成本？留 0，我們先用該股 2025 年均價估算，之後隨時可修正")
             with c2:
                 shares = st.number_input("股數", min_value=1, value=1000, step=1000)
             with c3:
@@ -400,8 +402,15 @@ def page_input():
             if st.form_submit_button("➕ 加入持股", use_container_width=True):
                 if selected:
                     sid = selected.split(" ")[0]
+                    est = False
+                    if cost <= 0:
+                        avg = get_processor().get_year_avg_price(sid)
+                        if avg is None:
+                            st.warning("查無此股價格資料，請手動輸入成本")
+                            st.stop()
+                        cost, est = avg, True
                     st.session_state.holdings.append({
-                        "stock_id": sid, "cost": cost,
+                        "stock_id": sid, "cost": cost, "cost_estimated": est,
                         "shares": shares, "buy_date": bdate.strftime("%Y-%m-%d"),
                     })
                     st.rerun()
@@ -472,6 +481,24 @@ def _instant_insight(item: dict, s: dict) -> str:
     return "　·　".join(bits)
 
 
+def _peer_note(item: dict, s: dict) -> str:
+    """匿名同儕對照：正常化虧損感（樹洞定位的靈魂），僅在使用者帳面虧損且該股落後大盤時顯示"""
+    close = s.get("收盤價")
+    if not close or item["cost"] <= 0:
+        return ""
+    pnl = (close / item["cost"] - 1) * 100
+    vs_mkt = s.get("與大盤比")
+    if pnl > -10 or vs_mkt is None or vs_mkt > -10:
+        return ""
+    stats = get_processor().get_forum_year_stats(item["stock_id"])
+    if not stats or stats["全年發文"] < 1000:
+        return ""
+    posts = stats["全年發文"]
+    posts_txt = f"{posts/10000:.1f} 萬" if posts >= 10000 else f"{posts:,}"
+    return (f"2025 年{s['股票名稱']}同學會有 {posts_txt} 則討論、"
+            f"全年落後大盤 {abs(vs_mkt):.0f}%——套牢的不只你，AI 會陪你一起看該怎麼想")
+
+
 def _show_holdings():
     h = st.session_state.holdings
     if not h:
@@ -488,10 +515,13 @@ def _show_holdings():
         nm = s["股票名稱"] if s else ""
         ind = s["產業"] if s else ""
         insight = _instant_insight(item, s) if s else ""
+        est_tag = ' <span class="hest">年均價估算，可修正</span>' if item.get("cost_estimated") else ""
+        peer = _peer_note(item, s) if s else ""
         st.markdown(
             f'<div class="hcard"><div class="hmain"><code>{item["stock_id"]}</code> '
-            f'<b>{nm}</b> <span class="hind">[{ind}]</span> — ${item["cost"]:.2f} × {item["shares"]:,} 股</div>'
+            f'<b>{nm}</b> <span class="hind">[{ind}]</span> — ${item["cost"]:.2f}{est_tag} × {item["shares"]:,} 股</div>'
             + (f'<div class="hins">⚡ {insight}</div>' if insight else "")
+            + (f'<div class="hpeer">🫂 {peer}</div>' if peer else "")
             + "</div>", unsafe_allow_html=True)
 
     c1, c2, c3 = st.columns([1, 1, 2])
@@ -746,6 +776,7 @@ def page_ai():
 
     llm = get_llm_service()
 
+    # 逐檔數據摘要（指標＋分位標尺），AI 報告在下方只出「一份」組合診斷
     for ctx in ctxs:
         name = f"{ctx['股票名稱']}（{ctx['股票代號']}）"
         pnl = ctx["帳面損益"]
@@ -760,15 +791,15 @@ def page_ai():
         html = mk_rail(ctx["年低"], ctx["年高"], ctx["現價分位"], ctx["成本分位"])
         if html:
             st.markdown(html, unsafe_allow_html=True)
-
-        # AI 回覆（優先讀預載結果，沒有則即時跑）
-        key = f"ai_{ctx['股票代號']}"
-        if key not in st.session_state:
-            with st.spinner(f"AI 分析 {ctx['股票名稱']} 中..."):
-                st.session_state[key] = llm.diagnose(ctx, alerts, engine=actual)
-
-        st.markdown(f'<div class="abox">{st.session_state[key]}</div>', unsafe_allow_html=True)
         st.markdown("")
+
+    # ── 組合層 AI 診斷：整個組合一份報告（優先讀預載結果）──
+    st.markdown(f"#### 🌳 組合診斷報告（{len(ctxs)} 檔持股綜合分析）")
+    if "ai_portfolio" not in st.session_state:
+        with st.spinner("AI 正在綜合分析你的持股組合..."):
+            st.session_state["ai_portfolio"] = llm.diagnose_portfolio(ctxs, alerts, engine=actual)
+
+    st.markdown(f'<div class="abox">{st.session_state["ai_portfolio"]}</div>', unsafe_allow_html=True)
 
     # CTA
     st.markdown("---")

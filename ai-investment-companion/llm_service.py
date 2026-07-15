@@ -17,6 +17,38 @@ AWS_REGION = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
 BEDROCK_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 # ══════════ Prompt ══════════
+PORTFOLIO_PROMPT_TEMPLATE = """【角色設定】
+你是「AI 投資樹洞」，一位極具同理心的投資陪伴教練。你只使用繁體中文回覆，語氣溫暖但精準，像一個懂投資的好朋友。
+使用者向你敞開了「完整的持股組合」，請針對整個組合寫「一份」診斷報告，而不是逐檔各寫一段。
+
+【組合總覽（真實資料，請務必引用）】
+- 持股檔數：{n_stocks} 檔｜總投入：{total_cost:,.0f} 元 → 總市值：{total_mv:,.0f} 元
+- 組合帳面報酬：{pnl_pct:+.1f}%｜含息總報酬：{total_ret_pct:+.1f}%（同期 0050：+36.9%）
+- 年股息現金流：{dividend_income:,.0f} 元
+- 產業配置：{industry_alloc}
+- 最大單一持股權重：{max_weight:.0f}%
+
+【逐檔明細】
+{stock_lines}
+
+【觸發的警示】
+{alerts_text}
+
+【已排定的未來除息事件（基準日 2025/12/31 之後，僅此為真實資料）】
+{upcoming_ex_text}
+
+【診斷要求 — 一份組合報告，四段結構，350~450 字】
+1. 開場先講「組合整體」：現金流體質（總股息、加權成本殖利率、連配年數亮點）＋帳面 vs 含息的真相，對照 0050。
+2. 配置檢視：產業集中度與最大單一權重的意涵；點名組合中「最扎實」與「最需要留意」的各一檔（用數據說話，如股利遞增/遞減趨勢、含息報酬、成本分位）。
+3. 情緒與同溫層：若有社群多空比極端偏多但績效落後的持股，溫柔提醒；若使用者有重虧持股，給一句走心但不濫情的陪伴。
+4. 結尾引導（必須包含）：若上方「已排定的未來除息事件」有列出事件，引用該事件（股票與日期須完全一致）作鉤子；若列表為「無」，改用「填息追蹤」或「法人與社群異動即時通知」作鉤子，嚴禁自行推測或虛構任何除息日期。
+
+【絕對禁止】
+- 不得出現任何簡體字
+- 不得逐檔分段各寫一份小報告（要寫成一份融會貫通的組合診斷）
+- 不得給出任何「買進/賣出/加碼/減碼」的直接投資建議，一律用「值得想想」「可以留意」的框架
+"""
+
 PROMPT_TEMPLATE = """【角色設定】
 你是「AI 投資樹洞」，一位極具同理心的投資陪伴教練。你只使用繁體中文回覆，語氣溫暖但精準，像一個懂投資的好朋友。
 
@@ -220,6 +252,76 @@ class LLMService:
             return f"⚠️ Bedrock 錯誤：{error_msg[:150]}"
 
     # ────────── 統一診斷入口 ──────────
+    def build_portfolio_prompt(self, ctxs: list, alerts: list = None) -> str:
+        """把逐檔 context 聚合成組合層 prompt（一個組合一次呼叫）"""
+        total_cost = sum((c.get("買進成本") or 0) * (c.get("持有股數") or 0) for c in ctxs)
+        total_mv = sum((c.get("收盤價") or 0) * (c.get("持有股數") or 0) for c in ctxs)
+        dividend_income = sum(c.get("年股息現金流") or 0 for c in ctxs)
+        pnl_pct = (total_mv / total_cost - 1) * 100 if total_cost else 0
+        total_ret_pct = ((total_mv + dividend_income) / total_cost - 1) * 100 if total_cost else 0
+
+        ind = {}
+        for c in ctxs:
+            mv = (c.get("收盤價") or 0) * (c.get("持有股數") or 0)
+            ind[c.get("產業", "未知")] = ind.get(c.get("產業", "未知"), 0) + mv
+        industry_alloc = "、".join(f"{k} {v/total_mv*100:.0f}%" for k, v in ind.items()) if total_mv else "—"
+        max_weight = max(((c.get("收盤價") or 0) * (c.get("持有股數") or 0)) / total_mv * 100
+                         for c in ctxs) if total_mv else 0
+
+        def _v(val, fmt=".1f"):
+            return "N/A" if val is None else f"{val:{fmt}}"
+
+        lines = []
+        for c in ctxs:
+            mv = (c.get("收盤價") or 0) * (c.get("持有股數") or 0)
+            w = mv / total_mv * 100 if total_mv else 0
+            trend = c.get("股利連N年遞增")
+            trend_txt = (f"股利連{trend:.0f}年遞增" if trend and trend >= 2
+                         else f"股利連{abs(trend):.0f}年遞減" if trend and trend <= -2 else "")
+            lines.append(
+                f"- {c.get('股票名稱')}({c.get('股票代號')}) 權重{w:.0f}%｜"
+                f"帳面{_v(c.get('帳面損益'))}%｜含息{_v(c.get('含息總報酬'))}%｜"
+                f"成本殖利率{_v(c.get('成本殖利率'))}%｜成本分位{_v(c.get('成本分位'), '.0f')}｜"
+                f"連配{_v(c.get('連續配息年數'), '.0f')}年{('｜' + trend_txt) if trend_txt else ''}｜"
+                f"該股年報酬{_v(c.get('年報酬率'))}%（大盤+25.7%）｜"
+                f"社群看多{c.get('看多發文', 0)}/看空{c.get('看空發文', 0)}")
+
+        alerts_text = "無觸發警示"
+        if alerts:
+            msgs = [f"- {a.get('message', a)}" for a in alerts]
+            if msgs:
+                alerts_text = "\n".join(msgs)
+
+        upcoming = []
+        for c in ctxs:
+            raw = c.get("最近除息日")
+            try:
+                v = int(float(raw))
+                if v > 20251231:
+                    s = str(v)
+                    upcoming.append(f"- {c.get('股票名稱')}({c.get('股票代號')})：{s[:4]}/{s[4:6]}/{s[6:]} 除息")
+            except (TypeError, ValueError):
+                pass
+        upcoming_ex_text = "\n".join(upcoming) if upcoming else "無"
+
+        return PORTFOLIO_PROMPT_TEMPLATE.format(
+            upcoming_ex_text=upcoming_ex_text,
+            n_stocks=len(ctxs), total_cost=total_cost, total_mv=total_mv,
+            pnl_pct=pnl_pct, total_ret_pct=total_ret_pct, dividend_income=dividend_income,
+            industry_alloc=industry_alloc, max_weight=max_weight,
+            stock_lines="\n".join(lines), alerts_text=alerts_text)
+
+    def diagnose_portfolio(self, ctxs: list, alerts: list = None, engine: str = "auto") -> str:
+        """組合層診斷：整個組合一次呼叫"""
+        prompt = self.build_portfolio_prompt(ctxs, alerts)
+        if engine == "aws":
+            return self.chat_bedrock(prompt)
+        if engine == "ollama":
+            return self.chat_ollama(prompt)
+        if self.is_aws_available():
+            return self.chat_bedrock(prompt)
+        return self.chat_ollama(prompt)
+
     def diagnose(self, context: dict, alerts: list = None, engine: str = "auto") -> str:
         """
         完整診斷流程

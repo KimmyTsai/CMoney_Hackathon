@@ -91,6 +91,27 @@ class DataProcessor:
             self._div_trend = dict(zip(merged["股票代號"], pd.to_numeric(merged["現金股利連N年遞增"], errors="coerce")))
         return self._div_trend
 
+    def get_year_avg_price(self, stock_id: str):
+        """2025 年均收盤價（成本選填時的估算值；有拆分者只取拆分後段，與分位邏輯一致）"""
+        df = self.price_data[self.price_data["股票代號"] == str(stock_id).strip()].sort_values("日期")
+        closes = df["收盤價"].dropna().tolist()
+        if not closes:
+            return None
+        start = 0
+        for i in range(1, len(closes)):
+            if closes[i - 1] > 0 and abs(closes[i] / closes[i - 1] - 1) > 0.30:
+                start = i
+        seg = closes[start:]
+        return round(sum(seg) / len(seg), 2)
+
+    def get_forum_year_stats(self, stock_id: str) -> dict:
+        """同學會 2025 全年統計（匿名同儕對照用）"""
+        f = self.forum_data[self.forum_data["股票代號"] == str(stock_id).strip()]
+        if f.empty:
+            return None
+        return {"全年發文": int(f["發文則數"].sum()),
+                "全年回文": int(f["回文則數"].sum()) if "回文則數" in f.columns else 0}
+
     def get_available_stocks(self) -> pd.DataFrame:
         df = self.wide_table[["股票代號", "股票名稱", "產業"]].copy()
         df["顯示"] = df["股票代號"] + " " + df["股票名稱"]
