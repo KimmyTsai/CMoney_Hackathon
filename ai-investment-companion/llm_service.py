@@ -356,15 +356,16 @@ class LLMService:
         "規則：1) 名稱一定要填；代號看不到就填 null，不要憑記憶猜代號。"
         "2) shares 是持有股數（「134股」→134；「1,000」→1000；台股一張=1000股，若欄位單位是張請乘以1000）。"
         "3) cost 是買進均價/成本價；若截圖只有現價沒有成本，cost 填 null，不要拿現價、市值或損益充當成本。"
-        "4) 同一檔出現多筆交易時合併為一筆（股數加總、成本可填 null）。"
+        "4) 同一檔股票出現多筆交易紀錄時，請「逐筆分開輸出」，每一列交易就是一個 JSON 物件——"
+        "不要合併、不要加總、不要自行計算平均（彙總由系統處理，你只負責忠實抄錄每一列）。"
         "5) 忽略非股票列（表頭、合計、日期列）。看不出任何股票就輸出 []。"
     )
 
     def extract_holdings_from_image(self, image_bytes: bytes, fmt: str) -> list:
         """用 Bedrock 視覺能力抽取截圖中的持股（fmt: 'png' 或 'jpeg'）"""
         import re as _re
-        resp = self.client.converse(
-            modelId=self.model_id,
+        resp = self.bedrock_client.converse(
+            modelId=BEDROCK_MODEL_ID,
             messages=[{"role": "user", "content": [
                 {"image": {"format": fmt, "source": {"bytes": image_bytes}}},
                 {"text": self.VISION_EXTRACT_PROMPT},

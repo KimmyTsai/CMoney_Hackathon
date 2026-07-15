@@ -453,7 +453,12 @@ def page_input():
         if st.session_state.get("ocr_records") is not None:
             recs, skipped, engine_used = st.session_state.ocr_records
             if recs:
-                st.success(f"✅ {engine_used} 辨識到 {len(recs)} 筆，可直接修改後匯入（成本留 0 會以年均價估算）")
+                total_lots = sum(r.get("lots", 1) for r in recs)
+                agg_note = f"（由 {total_lots} 筆交易紀錄彙總，成本為加權平均）" if total_lots > len(recs) else ""
+                st.success(f"✅ {engine_used} 辨識到 {len(recs)} 檔{agg_note}，可直接修改後匯入（成本留 0 會以年均價估算）")
+                for r in recs:
+                    if r.get("lots", 1) > 1:
+                        st.caption(f"　↳ {r['name']}：彙總 {r['lots']} 筆交易，共 {r['shares']:,} 股，加權平均成本 {r['cost']}")
                 edited = st.data_editor(
                     pd.DataFrame(recs)[["stock_id", "name", "cost", "shares"]].rename(
                         columns={"stock_id": "代號", "name": "名稱", "cost": "成本", "shares": "股數"}),
@@ -486,6 +491,9 @@ def page_input():
             else:
                 st.warning("未辨識到可對應的股票。" + ("；".join(skipped) if skipped else ""))
                 st.session_state.ocr_records = None
+
+    st.markdown("---")
+    _show_holdings()
 
 
 def _run_image_extraction(img) -> tuple:
@@ -527,23 +535,30 @@ def _run_image_extraction(img) -> tuple:
         except OCRError:
             return [], [], engine_used or "辨識"
 
-    records, skipped, seen = [], [], set()
+    # 同一檔多筆交易 → 程式端彙總：股數加總、成本取加權平均（不信任模型心算）
+    grouped, skipped = {}, []
     for rec in raw:
         sid = resolve(rec)
         label = rec.get("name") or rec.get("stock_id") or "?"
         if sid is None:
-            skipped.append(label)
+            if label not in skipped:
+                skipped.append(label)
             continue
-        if sid in seen:
-            continue
-        seen.add(sid)
-        db_name = stocks_db.loc[stocks_db["股票代號"] == sid, "股票名稱"].iloc[0]
-        records.append({"stock_id": sid, "name": db_name,
-                        "cost": rec.get("cost") or 0.0, "shares": rec.get("shares") or 1000})
-    return records, skipped, engine_used
+        g = grouped.setdefault(sid, {"lots": 0, "shares": 0, "cost_x_shares": 0.0, "costed_shares": 0})
+        sh = rec.get("shares") or 0
+        g["lots"] += 1
+        g["shares"] += sh
+        if rec.get("cost") and sh:
+            g["cost_x_shares"] += rec["cost"] * sh
+            g["costed_shares"] += sh
 
-    st.markdown("---")
-    _show_holdings()
+    records = []
+    for sid, g in grouped.items():
+        db_name = stocks_db.loc[stocks_db["股票代號"] == sid, "股票名稱"].iloc[0]
+        wavg = round(g["cost_x_shares"] / g["costed_shares"], 2) if g["costed_shares"] else 0.0
+        records.append({"stock_id": sid, "name": db_name, "cost": wavg,
+                        "shares": g["shares"] or 1000, "lots": g["lots"]})
+    return records, skipped, engine_used
 
 
 DEMO_PORTFOLIO = [
