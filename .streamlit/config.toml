@@ -1,0 +1,6 @@
+# 固定 Streamlit 基底為淺色主題：
+# 消除「使用者系統深色 vs App 自製深淺色切換」互相打架的問題，
+# 讓自製 dark_mode 的 CSS 永遠從已知的淺色基準覆蓋。
+[theme]
+base = "light"
+primaryColor = "#fbbf24"

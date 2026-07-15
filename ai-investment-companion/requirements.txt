@@ -1,0 +1,17 @@
+# AI 投資樹洞 (AI Investment Companion) v5
+# Python >= 3.9
+
+# 核心框架
+streamlit==1.40.0
+pandas==2.2.3
+
+# LLM - Ollama (本地 API)
+requests==2.32.3
+
+# LLM - AWS Bedrock
+boto3==1.34.131
+
+# OCR 圖片辨識
+easyocr==1.7.2
+Pillow==10.4.0
+numpy==1.26.4
