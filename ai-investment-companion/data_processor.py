@@ -27,6 +27,7 @@ class DataProcessor:
         self._forum_data = None
         self._price_data = None
         self._year_high_low_cache = None
+        self._div_trend = None
 
     @property
     def wide_table(self) -> pd.DataFrame:
@@ -62,11 +63,33 @@ class DataProcessor:
             if pd.notna(yh) and pd.notna(yl):
                 return float(yh), float(yl)
 
-        # Fallback: 從逐日行情算
-        df = self.price_data[self.price_data["股票代號"] == stock_id]
+        # Fallback: 從逐日行情算（含拆分偵測：收盤單日跳動 >30% 視為斷點，只取最後一段，
+        # 否則像 0050 這種年中 1 拆 4 的標的，年區間會橫跨拆分前後導致分位嚴重失真）
+        df = self.price_data[self.price_data["股票代號"] == stock_id].sort_values("日期")
         if df.empty:
             return None, None
-        return float(df["最高價"].max()), float(df["最低價"].min())
+        closes = df["收盤價"].dropna().tolist()
+        start = 0
+        for i in range(1, len(closes)):
+            if closes[i - 1] > 0 and abs(closes[i] / closes[i - 1] - 1) > 0.30:
+                start = i
+        seg = df.iloc[start:]
+        return float(seg["最高價"].max()), float(seg["最低價"].min())
+
+    @property
+    def div_trend(self) -> dict:
+        """現金股利連N年遞增（正=連增N年，負=連減N年），合併個股(06)與ETF(06b)"""
+        if self._div_trend is None:
+            frames = []
+            for fname in ["06_Consecutive_Dividend_Stocks_2025.csv",
+                          "06b_Consecutive_Dividend_ETF_2025.csv"]:
+                fp = DATA_DIR / fname
+                if fp.exists():
+                    df = pd.read_csv(fp, dtype={"股票代號": str})
+                    frames.append(df[["股票代號", "現金股利連N年遞增"]])
+            merged = pd.concat(frames).dropna() if frames else pd.DataFrame(columns=["股票代號", "現金股利連N年遞增"])
+            self._div_trend = dict(zip(merged["股票代號"], pd.to_numeric(merged["現金股利連N年遞增"], errors="coerce")))
+        return self._div_trend
 
     def get_available_stocks(self) -> pd.DataFrame:
         df = self.wide_table[["股票代號", "股票名稱", "產業"]].copy()
@@ -86,6 +109,7 @@ class DataProcessor:
             "產業": r.get("產業", "未知"),
             "收盤價": self._sf(r.get("收盤價")),
             "連續配息年數": self._sf(r.get("連續配息年數")),
+            "股利連N年遞增": self._sf(self.div_trend.get(stock_id)),
             "買點分位_系統": self._sf(r.get("買點分位(%)")),
             "殖利率": self._sf(r.get("殖利率(%)")),
             "本益比": self._sf(r.get("本益比(近四季)")),
@@ -196,6 +220,7 @@ class DataProcessor:
             "年股息現金流": annual_dividend_income,
             "市值": market_value,
             "連續配息年數": summary["連續配息年數"],
+            "股利連N年遞增": summary["股利連N年遞增"],  # 正=股利金額連增N年, 負=連減N年
             "殖利率": summary["殖利率"],
             "年報酬率": summary["年報酬率"],
             "與大盤比": summary["與大盤比"],

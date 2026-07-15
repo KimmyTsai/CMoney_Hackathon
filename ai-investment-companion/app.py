@@ -464,6 +464,11 @@ def _instant_insight(item: dict, s: dict) -> str:
     yrs = s.get("連續配息年數")
     if yrs and yrs > 0:
         bits.append(f"連續配息 <b>{yrs:.0f}</b> 年")
+    trend = s.get("股利連N年遞增")
+    if trend and trend >= 2:
+        bits.append(f'股利金額<span class="ins up">連 {trend:.0f} 年遞增</span>')
+    elif trend and trend <= -2:
+        bits.append(f'股利金額<span class="ins dn">連 {abs(trend):.0f} 年遞減</span>')
     return "　·　".join(bits)
 
 
@@ -764,15 +769,15 @@ def page_ai():
         import random
         seed = random.randint(0, 999999)
         balloon_html = BALLOON_COIN_HTML.replace("balloon-game", f"balloon-game-{seed}").replace("bc-canvas", f"bc-canvas-{seed}")
-        components.html(balloon_html, height=600, scrolling=False)
-        st.success("🎉 持股防護罩已啟動！快戳破氣球收集金幣吧！")
+        st.success("🎉 持股防護罩已啟動！快戳破氣球收集金幣吧！　⬇️ 你的專屬警示中心已在下方展開")
+        components.html(balloon_html, height=260, scrolling=False)
         # 不立即關閉，讓使用者可以再按一次
-        col_a, col_b, col_c = st.columns([1, 1, 1])
-        with col_b:
+        col_a, col_b = st.columns(2)
+        with col_a:
             if st.button("🎈 再來一波氣球！", use_container_width=True):
                 # 重新觸發（Streamlit rerun 會重新渲染 HTML component）
                 st.rerun()
-        with col_c:
+        with col_b:
             if st.button("✖️ 關閉特效", use_container_width=True):
                 st.session_state.show_coins = False
                 st.rerun()
