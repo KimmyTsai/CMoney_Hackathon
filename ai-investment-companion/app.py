@@ -59,6 +59,8 @@ st.markdown(f"""<style>
 [data-testid="stIconMaterial"],.material-symbols-rounded{{font-family:'Material Symbols Rounded'!important}}
 footer,#MainMenu{{visibility:hidden}}
 .stApp,.block-container{{background:{_bg}}}
+/* 防止瀏覽器依系統深色模式自動改變表單元件（date/number 等）配色，來源不一造成顏色不一致 */
+html,body{{color-scheme:{('only dark' if _dark else 'only light')}}}
 /* ── 文字全域（深淺模式一致覆蓋）── */
 p,li,span,.stMarkdown,h1,h2,h3,h4,h5,h6,label{{color:{_text}!important}}
 [data-testid="stCaptionContainer"] p{{color:{_sub_text}!important}}
@@ -161,12 +163,53 @@ button[data-baseweb="tab"][aria-selected="true"] p{{color:{_text}!important}}
 .hcard .hpeer{{margin-top:.25rem;font-size:.78em;font-style:italic}}
 .sc h4{{margin:0 0 .5rem;font-size:1em;color:{_text}!important}}
 /* 氣球特效 iframe：固定全螢幕覆蓋層，脫離文件流不佔版面，點擊穿透 */
-[data-testid="stIFrame"]{{position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;
+[data-testid="stIFrame"][height="1"]{{position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;
   z-index:9999!important;pointer-events:none!important;border:0!important;background:transparent!important}}
 .engine-badge{{display:inline-block;padding:2px 8px;border-radius:10px;font-size:.7em;font-weight:600}}
 .engine-badge.aws{{background:#dbeafe;color:#1e40af!important}}
 .engine-badge.ollama{{background:#fef3c7;color:#92400e!important}}
 </style>""", unsafe_allow_html=True)
+
+# ── 下拉選單顏色強制修正 ──
+# 原因：st.selectbox 的展開選單（BaseWeb popover）是由元件在「開啟當下」動態插入 DOM，
+# 且其自帶樣式會依瀏覽器/系統的深色模式判斷再上色，晚於並可能覆蓋掉我們上面寫的 CSS，
+# 導致不同電腦（不同瀏覽器判斷 prefers-color-scheme 的結果不同）看到深淺不一、甚至淺色字在淺底上看不清楚。
+# 用 MutationObserver 監看 popover 出現，直接對其套用 inline style（inline 優先權最高，且是在開啟當下才寫入，
+# 不受任何後載入樣式覆蓋），確保任何電腦、任何系統深色模式設定下都跟 app 目前的深/淺模式一致。
+components.html(f"""
+<script>
+(function() {{
+    const doc = window.parent.document;
+    const textColor = "{_text}";
+    const bgColor = "{_card_bg}";
+    const borderColor = "{_border}";
+
+    function fixNode(node) {{
+        if (!(node instanceof Element)) return;
+        const popovers = node.matches('[data-baseweb="popover"]')
+            ? [node] : Array.from(node.querySelectorAll ? node.querySelectorAll('[data-baseweb="popover"]') : []);
+        popovers.forEach(pop => {{
+            pop.style.setProperty('background', bgColor, 'important');
+            const listbox = pop.querySelector('[role="listbox"]');
+            if (listbox) {{
+                listbox.style.setProperty('background', bgColor, 'important');
+                listbox.style.setProperty('border', '1px solid ' + borderColor, 'important');
+            }}
+            pop.querySelectorAll('[role="option"], [role="option"] *').forEach(el => {{
+                el.style.setProperty('color', textColor, 'important');
+            }});
+        }});
+    }}
+
+    const observer = new MutationObserver(mutations => {{
+        mutations.forEach(m => m.addedNodes.forEach(fixNode));
+    }});
+    observer.observe(doc.body, {{ childList: true, subtree: true }});
+    // 頁面重新渲染時也檢查一次目前已存在的 popover
+    fixNode(doc.body);
+}})();
+</script>
+""", height=0)
 
 
 # ══════════ 氣球金幣特效 ══════════
@@ -911,7 +954,8 @@ def render_persona_card():
         if flavor:
             result = {**result, "roast": flavor}
 
-    rows = persona.composition_breakdown(ctxs, result)
+    # 打碼模式以「產業」聚合（與步驟頁的產業配置數值一致）；未打碼以「個股」聚合（多批次合併）
+    rows = persona.composition_breakdown(ctxs, result, by_industry=mask)
     svg = persona.build_card_svg(result, feats, rows, mask_amount=True, mask_code=mask)
 
     # ── 卡片渲染（抽卡翻牌動畫，置中）──
@@ -1083,7 +1127,7 @@ def page_ai():
 
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
-        if st.button("🎈 點我訂閱（開啟防護罩慶祝一下！）", type="primary", use_container_width=True):
+        if st.button("🎈 點我訂閱", type="primary", use_container_width=True):
             st.session_state.show_coins = True
             st.session_state.shield_on = True
             st.rerun()

@@ -306,20 +306,29 @@ def determine_persona(features: dict, market_ref: dict = None) -> dict:
 # ─────────────────────────────────────────────────────────────────────
 #  成分比例（給卡片畫「成分條」用）：以市值把持股歸到人格傾向
 # ─────────────────────────────────────────────────────────────────────
-def composition_breakdown(ctxs: list, persona: dict) -> list:
-    """回傳 [(名稱, 佔比%, 是否打碼顯示產業)]，供卡片列出前幾大成分。"""
+def composition_breakdown(ctxs: list, persona: dict, by_industry: bool = False) -> list:
+    """回傳成分清單供卡片畫成分條。
+    by_industry=True：以「產業」聚合，佔比與步驟頁「產業配置（依市值）」完全一致（打碼模式用）。
+    by_industry=False：以「個股」聚合，同一檔的多個買進批次會合併為一列。"""
     total = sum(_mv(c) for c in ctxs) or 1.0
+    agg = {}
+    for c in ctxs:
+        ind = c.get("產業", "未知")
+        key = ind if by_industry else str(c.get("股票代號", ""))
+        g = agg.setdefault(key, {
+            "name": ind if by_industry else c.get("股票名稱", ""),
+            "code": "" if by_industry else str(c.get("股票代號", "")),
+            "industry": ind,
+            "mv": 0.0,
+        })
+        g["mv"] += _mv(c)
     rows = []
-    for c in sorted(ctxs, key=lambda x: -_mv(x)):
-        pct = _mv(c) / total * 100
+    for g in sorted(agg.values(), key=lambda x: -x["mv"]):
+        pct = g["mv"] / total * 100
         if pct < 1:
             continue
-        rows.append({
-            "name": c.get("股票名稱", ""),
-            "code": str(c.get("股票代號", "")),
-            "industry": c.get("產業", "未知"),
-            "pct": pct,
-        })
+        rows.append({"name": g["name"], "code": g["code"],
+                     "industry": g["industry"], "pct": pct})
     return rows
 
 
@@ -379,7 +388,7 @@ def build_card_svg(
         comp_legend += (
             f'<circle cx="26" cy="{422 + i*18}" r="4" fill="{pal[i % 3]}"/>'
             f'<text x="38" y="{426 + i*18}" fill="#cbd5e1" font-size="12">'
-            f'{_esc(shown)} · {r["pct"]:.0f}%</text>'
+            f'{_esc(shown)} · {r["pct"]:.1f}%</text>'
         )
 
     # 吐槽文案：最多 3 行，文字框錨定固定頂端往下長，避免與成分圖例重疊
