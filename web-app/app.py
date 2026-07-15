@@ -82,8 +82,17 @@ header[data-testid="stHeader"] *{{color:{_sub_text}}}
 .stTextInput input,.stNumberInput input,.stDateInput input,textarea,
 [data-baseweb="select"]>div{{background:{_input_bg}!important;color:{_text}!important;border-color:{_border}!important}}
 [data-baseweb="select"] div,[data-baseweb="select"] span{{color:{_text}!important}}
+/* Streamlit 目前版本的下拉容器實際是 ul[data-testid="stSelectboxVirtualDropdown"]，
+   不是標準的 [role="listbox"]，且其上層 popover 容器與直屬 div 都各自帶有預設白底，
+   必須逐層覆蓋才能徹底蓋掉，否則深色模式下會變成「淺字疊淺底」看不清楚 */
+[data-baseweb="popover"],
+[data-baseweb="popover"] > div,
+[data-baseweb="popover"] ul[data-testid="stSelectboxVirtualDropdown"],
 [data-baseweb="popover"] [role="listbox"]{{background:{_card_bg}!important;border:1px solid {_border}}}
-[data-baseweb="popover"] [role="option"],[data-baseweb="popover"] [role="option"] *{{color:{_text}!important}}
+[data-baseweb="popover"] [role="option"]{{background:{_card_bg}!important;color:{_text}!important}}
+[data-baseweb="popover"] [role="option"] *{{color:{_text}!important;background:transparent!important}}
+[data-baseweb="popover"] [role="option"][aria-selected="true"],
+[data-baseweb="popover"] [role="option"]:hover{{background:{_border}!important}}
 /* ── st.info / st.success / st.warning：底色固定為淺色系，文字一律深色 ── */
 [data-testid="stAlert"] p,[data-testid="stAlert"] span{{color:{_text}!important}}
 [data-testid="stFileUploaderDropzone"]{{background:{_card_bg}!important;border:1px dashed {_border}!important}}
