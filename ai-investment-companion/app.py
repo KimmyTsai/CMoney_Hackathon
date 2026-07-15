@@ -7,7 +7,7 @@ import streamlit.components.v1 as components
 import pandas as pd
 import threading
 from datetime import datetime
-from data_processor import get_processor
+from data_processor import get_processor, get_shield_engine
 from llm_service import get_llm_service
 from ocr_service import ocr_parse_image, OCRError
 
@@ -86,6 +86,8 @@ button[data-baseweb="tab"][aria-selected="true"] p{{color:{_text}!important}}
 .hero h1,.hero h1 span{{font-size:2rem!important;color:#fbbf24!important;margin:0;letter-spacing:1px}}
 .hero .sub,.hero .sub span{{color:#94a3b8!important}}
 .hero .sub{{font-size:.9em;margin-top:.3rem}}
+.hero .pain,.hero .pain span{{color:#fcd34d!important}}
+.hero .pain{{font-size:.82em;margin-top:.55rem;background:rgba(251,191,36,.12);display:inline-block;padding:4px 14px;border-radius:14px;border:1px solid rgba(251,191,36,.35)}}
 .steps{{display:flex;gap:6px;margin-bottom:1.3rem}}
 .sp{{flex:1;text-align:center;padding:.5rem 0;border-radius:20px;font-size:.82em;font-weight:500}}
 .sp.a{{background:#fbbf24;color:#0f172a!important;font-weight:700;box-shadow:0 2px 8px rgba(251,191,36,.3)}}
@@ -116,6 +118,14 @@ button[data-baseweb="tab"][aria-selected="true"] p{{color:{_text}!important}}
 /* ── AI 報告框 ── */
 .abox{{background:{('#1e293b' if _dark else '#f8fafc')};border-left:4px solid #fbbf24;border-radius:0 10px 10px 0;padding:1.2rem 1.4rem;margin:.8rem 0;line-height:1.85;font-size:.9em;color:{_text}!important;white-space:pre-wrap}}
 .sc{{background:{_card_bg};border:1px solid {_border};border-radius:12px;padding:1rem;margin-bottom:.8rem}}
+.hcard{{background:{_card_bg};border:1px solid {_border};border-radius:10px;padding:.55rem .9rem;margin:.35rem 0}}
+.hcard code{{background:transparent;color:#fbbf24!important;font-weight:700}}
+.hcard .hind,.hcard .hind span{{color:{_sub_text}!important;font-size:.82em}}
+.hcard .hins{{margin-top:.25rem;font-size:.8em;color:{_sub_text}!important}}
+.hcard .hins b{{color:{_text}!important}}
+.ins.up{{color:#dc2626!important;font-weight:700}}
+.ins.dn{{color:#16a34a!important;font-weight:700}}
+.ins.gd{{color:#d97706!important;font-weight:700}}
 .sc h4{{margin:0 0 .5rem;font-size:1em;color:{_text}!important}}
 .engine-badge{{display:inline-block;padding:2px 8px;border-radius:10px;font-size:.7em;font-weight:600}}
 .engine-badge.aws{{background:#dbeafe;color:#1e40af!important}}
@@ -345,6 +355,7 @@ def main():
 
     st.markdown(f"""<div class="hero"><h1>🌳 AI 投資樹洞</h1>
     <div class="sub">敞開庫存，讓 AI 陪你面對每一次波動</div>
+    <div class="pain">📉 2025 年高股息 ETF 平均落後大盤 18%——你的存股，還好嗎？</div>
     <div style="font-size:.72rem;color:#6a8caf;margin-top:.3rem">
     📅 2025/12/31 ｜ <span class="engine-badge {badge_cls}">{engine_label}</span> ｜ 📊 300 檔標的
     </div></div>""", unsafe_allow_html=True)
@@ -364,6 +375,7 @@ def main():
 # ══════════ 步驟 1 ══════════
 def page_input():
     st.markdown("### 📥 導入持股")
+    st.caption("🔒 你的持股僅存在本次瀏覽階段——不綁券商帳號、不上傳雲端、不需註冊，關閉頁面即清除，也可隨時按「清空」。")
     tab1, tab2 = st.tabs(["✍️ 手動輸入", "📸 截圖 OCR"])
 
     with tab1:
@@ -423,10 +435,45 @@ def page_input():
     _show_holdings()
 
 
+DEMO_PORTFOLIO = [
+    {"stock_id": "00919", "cost": 23.5, "shares": 10000, "buy_date": "2025-06-01"},
+    {"stock_id": "2886",  "cost": 42.0, "shares": 3000,  "buy_date": "2025-03-15"},
+    {"stock_id": "1101",  "cost": 38.0, "shares": 2000,  "buy_date": "2023-08-01"},
+]
+
+
+def _instant_insight(item: dict, s: dict) -> str:
+    """加入持股當下的即時洞察（一檔就有回饋）"""
+    bits = []
+    close, div = s.get("收盤價"), s.get("現金股利")
+    if close and item["cost"] > 0:
+        pnl = (close / item["cost"] - 1) * 100
+        cls = "up" if pnl >= 0 else "dn"
+        bits.append(f'帳面 <span class="ins {cls}">{pnl:+.1f}%</span>')
+        if div:
+            total = ((close + div) / item["cost"] - 1) * 100
+            cls2 = "up" if total >= 0 else "dn"
+            bits.append(f'含息 <span class="ins {cls2}">{total:+.1f}%</span>')
+            bits.append(f'成本殖利率 <span class="ins gd">{div / item["cost"] * 100:.2f}%</span>')
+    try:
+        pctl = get_processor().calculate_percentile(item["cost"], item["stock_id"])
+        if pctl is not None:
+            bits.append(f"成本在年內 <b>{pctl:.0f}</b> 分位")
+    except Exception:
+        pass
+    yrs = s.get("連續配息年數")
+    if yrs and yrs > 0:
+        bits.append(f"連續配息 <b>{yrs:.0f}</b> 年")
+    return "　·　".join(bits)
+
+
 def _show_holdings():
     h = st.session_state.holdings
     if not h:
-        st.info("👆 請先選擇股票並填入成本與股數")
+        st.info("👆 選一檔股票填入成本與股數——**一檔就能健診**，不用一次填完。")
+        if st.button("👀 還沒準備好？一鍵載入示範組合看看別人的健診", use_container_width=True):
+            st.session_state.holdings = [dict(x) for x in DEMO_PORTFOLIO]
+            st.rerun()
         return
 
     st.markdown(f"**📋 持股清單（{len(h)} 檔）**")
@@ -435,7 +482,12 @@ def _show_holdings():
         s = p.get_stock_summary(item["stock_id"])
         nm = s["股票名稱"] if s else ""
         ind = s["產業"] if s else ""
-        st.markdown(f"　`{item['stock_id']}` **{nm}** [{ind}] — ${item['cost']:.2f} × {item['shares']:,} 股")
+        insight = _instant_insight(item, s) if s else ""
+        st.markdown(
+            f'<div class="hcard"><div class="hmain"><code>{item["stock_id"]}</code> '
+            f'<b>{nm}</b> <span class="hind">[{ind}]</span> — ${item["cost"]:.2f} × {item["shares"]:,} 股</div>'
+            + (f'<div class="hins">⚡ {insight}</div>' if insight else "")
+            + "</div>", unsafe_allow_html=True)
 
     c1, c2, c3 = st.columns([1, 1, 2])
     with c1:
@@ -571,6 +623,39 @@ def _render_stock_card(ctx):
     st.markdown("</div>", unsafe_allow_html=True)
 
 
+
+# ══════════ 持股防護罩：警示中心 ══════════
+def render_shield_center():
+    st.markdown("---")
+    st.markdown("### 🛡️ 持股防護罩已開啟")
+    if st.session_state.get("shield_alerts") is None:
+        with st.spinner("掃描法人動向、價格動能、社群情緒與除息事件..."):
+            st.session_state.shield_alerts = get_shield_engine().generate(st.session_state.holdings)
+    alerts = st.session_state.shield_alerts
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("2025 全年通知", f"{alerts['總數']} 則")
+    c2.metric("平均每月", f"{alerts['總數']/12:.1f} 則")
+    c3.metric("即將到來", f"{len(alerts['即將到來'])} 個事件")
+    st.caption("　·　".join(f"{k} {v} 則" for k, v in alerts["統計"].items()))
+
+    tab_up, tab_replay = st.tabs(["📅 即將到來", "⏪ 2025 全年回放"])
+    with tab_up:
+        if alerts["即將到來"]:
+            for a in alerts["即將到來"]:
+                st.info(f"**{a['日期']}** {a['類型']}　{a['訊息']}")
+        else:
+            st.markdown("目前沒有已排定的未來事件。防護罩會在法人籌碼、價格動能或社群情緒出現變化時即時通知你。")
+    with tab_replay:
+        st.caption("用 2025 全年真實資料回放：如果你年初就開啟防護罩，會在這些時刻收到通知——這就是你回來看一眼的理由。")
+        for a in alerts["回放"][:15]:
+            st.markdown(f"**{a['日期']}**　{a['類型']}　{a['訊息']}")
+        if alerts["總數"] > 15:
+            with st.expander(f"查看其餘 {alerts['總數']-15} 則"):
+                for a in alerts["回放"][15:]:
+                    st.markdown(f"**{a['日期']}**　{a['類型']}　{a['訊息']}")
+
+
 # ══════════ 步驟 3 ══════════
 def page_ai():
     ctxs = st.session_state.contexts
@@ -618,6 +703,8 @@ def page_ai():
             # 切引擎時清除舊回覆
             for k in [k for k in st.session_state if k.startswith("ai_")]:
                 del st.session_state[k]
+            st.session_state.shield_on = False
+            st.session_state.shield_alerts = None
             st.rerun()
     else:
         actual = engine_choices[0]
@@ -668,6 +755,7 @@ def page_ai():
     with c2:
         if st.button("🎈 點我訂閱（戳破氣球拿金幣！）", type="primary", use_container_width=True):
             st.session_state.show_coins = True
+            st.session_state.shield_on = True
             st.rerun()
 
     # 氣球金幣特效（可重複觸發）
@@ -689,12 +777,18 @@ def page_ai():
                 st.session_state.show_coins = False
                 st.rerun()
 
+    # ── 持股防護罩：警示中心（真實資料驅動）──
+    if st.session_state.get("shield_on"):
+        render_shield_center()
+
     st.markdown("")
     c1, c2 = st.columns(2)
     with c1:
         if st.button("🔄 重新健診", use_container_width=True):
             for k in [k for k in st.session_state if k.startswith("ai_")]:
                 del st.session_state[k]
+            st.session_state.shield_on = False
+            st.session_state.shield_alerts = None
             st.session_state.ai_prefetch_done = False
             st.session_state["_prefetch_started"] = False
             st.session_state.step = 1

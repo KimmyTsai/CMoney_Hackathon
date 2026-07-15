@@ -286,3 +286,143 @@ def get_processor() -> DataProcessor:
     if _instance is None:
         _instance = DataProcessor()
     return _instance
+
+
+# ══════════ 持股防護罩：警示引擎 ══════════
+# 四種警示，全部由真實資料觸發（回放 2025 全年 + 未來已排定事件）：
+#   🏦 法人動向(02)：外資/投信連續 >=5 日買超或賣超
+#   📈 價格動能(01)：創今年新高/新低（含拆分斷點與年初暖機處理）
+#   💬 社群情緒(10)：單日聲量爆量(>=3倍30日均且>=50則)、情緒轉空(看空>看多且>=30則)
+#   📅 除息事件(05)：除息日提醒
+
+class ShieldEngine:
+    def __init__(self, processor: "DataProcessor"):
+        self.p = processor
+        self._inst = None
+        self._div = None
+
+    @property
+    def inst_data(self) -> pd.DataFrame:
+        if self._inst is None:
+            self._inst = pd.read_csv(DATA_DIR / "02_Institutional_Trading_2025.csv",
+                                     dtype={"股票代號": str, "日期": str}).sort_values(["股票代號", "日期"])
+        return self._inst
+
+    @property
+    def dividend_data(self) -> pd.DataFrame:
+        if self._div is None:
+            self._div = pd.read_csv(DATA_DIR / "05_Dividend_Ex_Dividend_2025.csv",
+                                    dtype={"股票代號": str})
+        return self._div
+
+    @staticmethod
+    def _fmt(d) -> str:
+        s = str(d)
+        return f"{s[:4]}/{s[4:6]}/{s[6:]}"
+
+    def _stock_name(self, sid: str) -> str:
+        row = self.p.wide_table[self.p.wide_table["股票代號"] == sid]
+        return row.iloc[0]["股票名稱"] if len(row) else sid
+
+    def _institutional_alerts(self, sid, name):
+        alerts = []
+        g = self.inst_data[self.inst_data["股票代號"] == sid]
+        for col, who in [("外資買賣超", "外資"), ("投信買賣超", "投信")]:
+            streak, direction = 0, 0
+            for _, row in g.iterrows():
+                v = row[col]
+                if pd.isna(v) or v == 0:
+                    streak, direction = 0, 0
+                    continue
+                d = 1 if v > 0 else -1
+                streak = streak + 1 if d == direction else 1
+                direction = d
+                if streak == 5:  # 每一波只在第 5 天觸發一次
+                    act = "買超" if d > 0 else "賣超"
+                    alerts.append({"日期": self._fmt(row["日期"]), "類型": "🏦 法人動向",
+                                   "訊息": f"{who}已連續 5 日{act}{name}，可留意籌碼變化"})
+        return alerts
+
+    def _price_alerts(self, sid, name):
+        alerts = []
+        g = self.p.price_data[self.p.price_data["股票代號"] == sid].sort_values("日期")[["日期", "收盤價"]].dropna()
+        run_hi = run_lo = prev = None
+        warmup = 20  # 年初前 20 個交易日不告警
+        for i, (_, row) in enumerate(g.iterrows()):
+            c = row["收盤價"]
+            if prev is not None and prev > 0 and abs(c / prev - 1) > 0.30:
+                run_hi, run_lo = None, None  # 拆分斷點：重置並重新暖機
+                warmup = i + 20
+            prev = c
+            new_hi = run_hi is None or c > run_hi
+            new_lo = run_lo is None or c < run_lo
+            run_hi = c if new_hi else run_hi
+            run_lo = c if new_lo else run_lo
+            if i < warmup:
+                continue
+            if new_hi:
+                alerts.append({"日期": self._fmt(row["日期"]), "類型": "📈 價格動能",
+                               "訊息": f"{name}收盤 {c} 創今年新高"})
+            elif new_lo:
+                alerts.append({"日期": self._fmt(row["日期"]), "類型": "📉 價格動能",
+                               "訊息": f"{name}收盤 {c} 創今年新低"})
+        # 同方向連續創高/低，同一個月只留第一則，避免洗版
+        dedup, last_type, last_month = [], None, None
+        for a in alerts:
+            if a["類型"] != last_type or a["日期"][:7] != last_month:
+                dedup.append(a)
+            last_type, last_month = a["類型"], a["日期"][:7]
+        return dedup
+
+    def _forum_alerts(self, sid, name):
+        alerts = []
+        g = self.p.forum_data[self.p.forum_data["股票代號"] == sid].sort_values("日期").reset_index(drop=True)
+        for i, row in g.iterrows():
+            posts = row["發文則數"]
+            base = g["發文則數"].iloc[max(0, i - 30):i]
+            avg = base.mean() if len(base) >= 10 else None
+            if avg and posts >= max(50, avg * 3):
+                prev_posts = g["發文則數"].iloc[i - 1] if i > 0 else 0
+                if prev_posts < max(50, avg * 3):
+                    alerts.append({"日期": self._fmt(row["日期"]), "類型": "💬 社群情緒",
+                                   "訊息": f"{name}同學會單日 {int(posts)} 則發文，達 30 日均量 {posts/avg:.0f} 倍，討論突然升溫"})
+            if row["看空發文"] > row["看多發文"] and posts >= 30:
+                alerts.append({"日期": self._fmt(row["日期"]), "類型": "💬 社群情緒",
+                               "訊息": f"{name}同學會當日看空({int(row['看空發文'])}) 超過看多({int(row['看多發文'])})，情緒轉空"})
+        return alerts
+
+    def _dividend_alerts(self, sid, name):
+        past, future = [], []
+        d = self.dividend_data[self.dividend_data["股票代號"] == sid]
+        for _, row in d.iterrows():
+            if pd.isna(row["除息日"]):
+                continue
+            v = int(row["除息日"])
+            cash = row.get("現金股利")
+            cash_txt = f"，現金股利 {cash} 元" if pd.notna(cash) and str(cash).strip() else ""
+            item = {"日期": self._fmt(v), "類型": "📅 除息事件",
+                    "訊息": f"{name}於 {self._fmt(v)} 除息{cash_txt}，留意參與除息的資格日"}
+            (future if v > 20251231 else past).append(item)
+        return past, future
+
+    def generate(self, holdings: list) -> dict:
+        replay, upcoming = [], []
+        for h in holdings:
+            sid = h["stock_id"]
+            name = self._stock_name(sid)
+            replay += self._institutional_alerts(sid, name)
+            replay += self._price_alerts(sid, name)
+            replay += self._forum_alerts(sid, name)
+            past_div, future_div = self._dividend_alerts(sid, name)
+            replay += past_div
+            upcoming += future_div
+        replay.sort(key=lambda a: a["日期"], reverse=True)
+        upcoming.sort(key=lambda a: a["日期"])
+        by_type = {}
+        for a in replay:
+            by_type[a["類型"]] = by_type.get(a["類型"], 0) + 1
+        return {"回放": replay, "即將到來": upcoming, "統計": by_type, "總數": len(replay)}
+
+
+def get_shield_engine() -> ShieldEngine:
+    return ShieldEngine(get_processor())
