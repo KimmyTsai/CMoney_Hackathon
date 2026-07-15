@@ -435,11 +435,13 @@ class ShieldEngine:
         for h in holdings:
             sid = h["stock_id"]
             name = self._stock_name(sid)
-            replay += self._institutional_alerts(sid, name)
-            replay += self._price_alerts(sid, name)
-            replay += self._forum_alerts(sid, name)
+            batch = (self._institutional_alerts(sid, name) + self._price_alerts(sid, name)
+                     + self._forum_alerts(sid, name))
             past_div, future_div = self._dividend_alerts(sid, name)
-            replay += past_div
+            batch += past_div
+            for a in batch + future_div:
+                a["名稱"] = name
+            replay += batch
             upcoming += future_div
         replay.sort(key=lambda a: a["日期"], reverse=True)
         upcoming.sort(key=lambda a: a["日期"])

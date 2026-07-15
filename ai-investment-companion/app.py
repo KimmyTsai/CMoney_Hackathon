@@ -629,6 +629,28 @@ def _render_stock_card(ctx):
 
 
 
+
+def _news_link(alert: dict) -> str:
+    """產生該警示事件的 Google 新聞搜尋連結（限定警示日前後 4 天，真實新聞、非生成內容）"""
+    from urllib.parse import quote
+    from datetime import timedelta
+    kw = {
+        "🏦 法人動向": "法人 買賣超",
+        "📈 價格動能": "股價 新高",
+        "📉 價格動能": "股價 下跌",
+        "💬 社群情緒": "股價",
+        "📅 除息事件": "除息",
+    }.get(alert["類型"], "")
+    q = quote(f'{alert.get("名稱", "")} {kw}')
+    try:
+        d = datetime.strptime(alert["日期"], "%Y/%m/%d")
+        lo, hi = d - timedelta(days=4), d + timedelta(days=4)
+        tbs = f"cdr:1,cd_min:{lo.month}/{lo.day}/{lo.year},cd_max:{hi.month}/{hi.day}/{hi.year}"
+        return f"https://www.google.com/search?q={q}&tbm=nws&tbs={quote(tbs, safe=':,/')}"
+    except Exception:
+        return f"https://www.google.com/search?q={q}&tbm=nws"
+
+
 # ══════════ 持股防護罩：警示中心 ══════════
 def render_shield_center():
     st.markdown("---")
@@ -654,11 +676,11 @@ def render_shield_center():
     with tab_replay:
         st.caption("用 2025 全年真實資料回放：如果你年初就開啟防護罩，會在這些時刻收到通知——這就是你回來看一眼的理由。")
         for a in alerts["回放"][:15]:
-            st.markdown(f"**{a['日期']}**　{a['類型']}　{a['訊息']}")
+            st.markdown(f"**{a['日期']}**　{a['類型']}　{a['訊息']}　[🔎 相關新聞]({_news_link(a)})")
         if alerts["總數"] > 15:
             with st.expander(f"查看其餘 {alerts['總數']-15} 則"):
                 for a in alerts["回放"][15:]:
-                    st.markdown(f"**{a['日期']}**　{a['類型']}　{a['訊息']}")
+                    st.markdown(f"**{a['日期']}**　{a['類型']}　{a['訊息']}　[🔎 相關新聞]({_news_link(a)})")
 
 
 # ══════════ 步驟 3 ══════════
