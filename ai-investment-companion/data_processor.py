@@ -233,6 +233,8 @@ class DataProcessor:
             try:
                 from datetime import datetime as _dt
                 holding_days = (_dt(2025, 12, 31) - _dt.strptime(str(buy_date)[:10], "%Y-%m-%d")).days
+                if holding_days < 0:  # 買進日期晚於基準日（demo 時間規則外）不計
+                    holding_days = None
             except (ValueError, TypeError):
                 pass
 
@@ -468,8 +470,12 @@ class ShieldEngine:
 
     def generate(self, holdings: list) -> dict:
         replay, upcoming = [], []
+        seen_sids = set()
         for h in holdings:
             sid = h["stock_id"]
+            if sid in seen_sids:  # 同檔多批次只掃一次，避免重複警示
+                continue
+            seen_sids.add(sid)
             name = self._stock_name(sid)
             batch = (self._institutional_alerts(sid, name) + self._price_alerts(sid, name)
                      + self._forum_alerts(sid, name))

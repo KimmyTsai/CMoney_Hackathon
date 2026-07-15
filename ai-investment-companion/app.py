@@ -77,6 +77,10 @@ header[data-testid="stHeader"] *{{color:{_sub_text}}}
 [data-baseweb="popover"] [role="option"],[data-baseweb="popover"] [role="option"] *{{color:{_text}!important}}
 /* ── st.info / st.success / st.warning：底色固定為淺色系，文字一律深色 ── */
 [data-testid="stAlert"] p,[data-testid="stAlert"] span{{color:{_text}!important}}
+[data-testid="stFileUploaderDropzone"]{{background:{_card_bg}!important;border:1px dashed {_border}!important}}
+[data-testid="stFileUploaderDropzone"] span,[data-testid="stFileUploaderDropzone"] small,[data-testid="stFileUploaderDropzone"] div{{color:{_sub_text}!important}}
+[data-testid="stFileUploaderDropzone"] button{{background:{_card_bg}!important;color:{_text}!important;border:1px solid {_border}!important}}
+[data-testid="stFileUploaderDeleteBtn"] button{{color:{_sub_text}!important}}
 [data-testid="stToast"]{{background:{_card_bg}!important;border:1px solid {_border}!important}}
 [data-testid="stToast"] p,[data-testid="stToast"] span,[data-testid="stToast"] div{{color:{_text}!important}}
 /* ── Tabs / Expander ── */
@@ -425,17 +429,14 @@ def page_input():
                             st.warning("查無此股價格資料，請手動輸入成本")
                             st.stop()
                         cost, est = avg, True
-                    already = any(x["stock_id"] == sid for x in st.session_state.holdings)
-                    # 同代號覆蓋更新，避免重複持股（重複加入視為修改成本/股數）
-                    st.session_state.holdings = [x for x in st.session_state.holdings
-                                                 if x["stock_id"] != sid]
+                    lot_n = sum(1 for x in st.session_state.holdings if x["stock_id"] == sid) + 1
                     st.session_state.holdings.append({
                         "stock_id": sid, "cost": cost, "cost_estimated": est,
                         "shares": shares, "buy_date": bdate.strftime("%Y-%m-%d"),
                     })
                     st.session_state["_added_msg"] = (
-                        f"{'已更新' if already else '已加入'} {selected}（${cost:.2f} × {shares:,} 股"
-                        + ("，成本為年均價估算" if est else "") + "）")
+                        f"已加入 {selected}" + (f" 第 {lot_n} 筆" if lot_n > 1 else "")
+                        + f"（${cost:.2f} × {shares:,} 股" + ("，成本為年均價估算" if est else "") + "）")
                     st.rerun()
                 else:
                     st.warning("請先從搜尋框選擇一檔股票")
@@ -453,40 +454,40 @@ def page_input():
         if st.session_state.get("ocr_records") is not None:
             recs, skipped, engine_used = st.session_state.ocr_records
             if recs:
-                total_lots = sum(r.get("lots", 1) for r in recs)
-                agg_note = f"（由 {total_lots} 筆交易紀錄彙總，成本為加權平均）" if total_lots > len(recs) else ""
-                st.success(f"✅ {engine_used} 辨識到 {len(recs)} 檔{agg_note}，可直接修改後匯入（成本留 0 會以年均價估算）")
-                for r in recs:
-                    if r.get("lots", 1) > 1:
-                        st.caption(f"　↳ {r['name']}：彙總 {r['lots']} 筆交易，共 {r['shares']:,} 股，加權平均成本 {r['cost']}")
+                st.success(f"✅ {engine_used} 辨識到 {len(recs)} 筆交易，每筆為獨立持股批次，可修改後匯入（成本留 0 以年均價估算）")
                 edited = st.data_editor(
-                    pd.DataFrame(recs)[["stock_id", "name", "cost", "shares"]].rename(
-                        columns={"stock_id": "代號", "name": "名稱", "cost": "成本", "shares": "股數"}),
+                    pd.DataFrame(recs)[["stock_id", "name", "cost", "shares", "buy_date"]].rename(
+                        columns={"stock_id": "代號", "name": "名稱", "cost": "成本",
+                                 "shares": "股數", "buy_date": "買進日期"}),
                     use_container_width=True, key="ocr_editor", num_rows="dynamic")
                 if skipped:
                     st.warning("以下標的不在 300 檔示範資料庫，已略過：" + "、".join(skipped))
                 if st.button("📥 確認並匯入", type="primary", use_container_width=True):
+                    # 重匯同一張截圖不重複：先移除本次匯入涉及股票的既有批次
+                    sids_in_import = {str(r["代號"]).strip() for _, r in edited.iterrows()
+                                      if str(r["代號"]).strip() and str(r["代號"]).strip() != "nan"}
+                    st.session_state.holdings = [x for x in st.session_state.holdings
+                                                 if x["stock_id"] not in sids_in_import]
                     n = 0
                     for _, row in edited.iterrows():
                         sid = str(row["代號"]).strip()
-                        if not sid:
+                        if not sid or sid == "nan":
                             continue
-                        cost = float(row["成本"]) if row["成本"] else 0.0
+                        cost = float(row["成本"]) if pd.notna(row["成本"]) and row["成本"] else 0.0
                         est = False
                         if cost <= 0:
                             avg = get_processor().get_year_avg_price(sid)
                             if avg is None:
                                 continue
                             cost, est = avg, True
-                        st.session_state.holdings = [x for x in st.session_state.holdings
-                                                     if x["stock_id"] != sid]
+                        bd = str(row["買進日期"]).strip()[:10] if pd.notna(row["買進日期"]) and str(row["買進日期"]).strip() else "2025-06-01"
                         st.session_state.holdings.append({
                             "stock_id": sid, "cost": cost, "cost_estimated": est,
-                            "shares": int(row["股數"]) if row["股數"] else 1000,
-                            "buy_date": "2025-06-01"})
+                            "shares": int(row["股數"]) if pd.notna(row["股數"]) and row["股數"] else 1000,
+                            "buy_date": bd})
                         n += 1
                     st.session_state.ocr_records = None
-                    st.session_state["_added_msg"] = f"已從截圖匯入 {n} 檔持股"
+                    st.session_state["_added_msg"] = f"已從截圖匯入 {n} 筆持股批次"
                     st.rerun()
             else:
                 st.warning("未辨識到可對應的股票。" + ("；".join(skipped) if skipped else ""))
@@ -535,8 +536,8 @@ def _run_image_extraction(img) -> tuple:
         except OCRError:
             return [], [], engine_used or "辨識"
 
-    # 同一檔多筆交易 → 程式端彙總：股數加總、成本取加權平均（不信任模型心算）
-    grouped, skipped = {}, []
+    # 逐筆保留：每筆交易的成本/股數/買進日期都不同，是獨立的持股批次（命題 INPUT 規格含買進日期）
+    records, skipped = [], []
     for rec in raw:
         sid = resolve(rec)
         label = rec.get("name") or rec.get("stock_id") or "?"
@@ -544,20 +545,11 @@ def _run_image_extraction(img) -> tuple:
             if label not in skipped:
                 skipped.append(label)
             continue
-        g = grouped.setdefault(sid, {"lots": 0, "shares": 0, "cost_x_shares": 0.0, "costed_shares": 0})
-        sh = rec.get("shares") or 0
-        g["lots"] += 1
-        g["shares"] += sh
-        if rec.get("cost") and sh:
-            g["cost_x_shares"] += rec["cost"] * sh
-            g["costed_shares"] += sh
-
-    records = []
-    for sid, g in grouped.items():
         db_name = stocks_db.loc[stocks_db["股票代號"] == sid, "股票名稱"].iloc[0]
-        wavg = round(g["cost_x_shares"] / g["costed_shares"], 2) if g["costed_shares"] else 0.0
-        records.append({"stock_id": sid, "name": db_name, "cost": wavg,
-                        "shares": g["shares"] or 1000, "lots": g["lots"]})
+        records.append({"stock_id": sid, "name": db_name,
+                        "cost": rec.get("cost") or 0.0,
+                        "shares": rec.get("shares") or 1000,
+                        "buy_date": rec.get("buy_date") or ""})
     return records, skipped, engine_used
 
 
@@ -616,10 +608,10 @@ def _peer_note(item: dict, s: dict) -> str:
             f"全年落後大盤 {abs(vs_mkt):.0f}%——套牢的不只你，AI 會陪你一起看該怎麼想")
 
 
-def _remove_holding(stock_id: str, name: str):
-    """個別移除持股，並清除所有依賴舊組合的下游快取"""
-    st.session_state.holdings = [x for x in st.session_state.holdings
-                                 if x["stock_id"] != stock_id]
+def _remove_holding(idx: int, name: str):
+    """移除單一持股批次（以索引），並清除所有依賴舊組合的下游快取"""
+    st.session_state.holdings = [x for i, x in enumerate(st.session_state.holdings)
+                                 if i != idx]
     st.session_state.contexts = []
     st.session_state.alerts = []
     for k in [k for k in st.session_state if k.startswith("ai_")]:
@@ -628,7 +620,7 @@ def _remove_holding(stock_id: str, name: str):
     st.session_state["_prefetch_started"] = False
     st.session_state.shield_on = False
     st.session_state.shield_alerts = None
-    st.session_state["_added_msg"] = f"已移除 {stock_id} {name}"
+    st.session_state["_added_msg"] = f"已移除一筆 {name}"
 
 
 def _show_holdings():
@@ -653,13 +645,14 @@ def _show_holdings():
         with col_card:
             st.markdown(
                 f'<div class="hcard"><div class="hmain"><code>{item["stock_id"]}</code> '
-                f'<b>{nm}</b> <span class="hind">[{ind}]</span> — ${item["cost"]:.2f}{est_tag} × {item["shares"]:,} 股</div>'
+                f'<b>{nm}</b> <span class="hind">[{ind}]</span> — ${item["cost"]:.2f}{est_tag} × {item["shares"]:,} 股'
+                f' <span class="hind">({item.get("buy_date", "")} 買進)</span></div>'
                 + (f'<div class="hins">⚡ {insight}</div>' if insight else "")
                 + (f'<div class="hpeer">🫂 {peer}</div>' if peer else "")
                 + "</div>", unsafe_allow_html=True)
         with col_del:
-            if st.button("✕", key=f"del_{idx}_{item['stock_id']}", help=f"移除 {nm}", use_container_width=True):
-                _remove_holding(item["stock_id"], nm)
+            if st.button("✕", key=f"del_{idx}_{item['stock_id']}", help=f"移除這筆 {nm}", use_container_width=True):
+                _remove_holding(idx, nm)
                 st.rerun()
 
     c1, c3 = st.columns([1, 3])

@@ -29,7 +29,7 @@ PORTFOLIO_PROMPT_TEMPLATE = """【角色設定】
 - 市值分佈：{cap_mix}
 - 最大單一持股權重：{max_weight:.0f}%
 
-【逐檔明細】
+【逐檔明細】（同一檔股票出現多列時，代表使用者「分批買進」的不同批次——請比較各批次的成本分位與買進時點，分析其進場習慣與是否有越攤越平的模式）
 {stock_lines}
 
 【觸發的警示】
@@ -352,13 +352,14 @@ class LLMService:
     VISION_EXTRACT_PROMPT = (
         "這是一張台股看盤/下單 App 的截圖（可能是庫存頁、對帳單或交易紀錄）。"
         "請抽取其中的股票資訊，只輸出 JSON 陣列、不要任何其他文字或 markdown 圍欄，格式：\n"
-        '[{"name":"股票名稱","stock_id":"代號或null","shares":股數整數或null,"cost":買進成本或均價浮點數或null}]\n'
+        '[{"name":"股票名稱","stock_id":"代號或null","shares":股數整數或null,"cost":買進成本或均價浮點數或null,"date":"買進/成交日期YYYY-MM-DD或null"}]\n'
         "規則：1) 名稱一定要填；代號看不到就填 null，不要憑記憶猜代號。"
         "2) shares 是持有股數（「134股」→134；「1,000」→1000；台股一張=1000股，若欄位單位是張請乘以1000）。"
         "3) cost 是買進均價/成本價；若截圖只有現價沒有成本，cost 填 null，不要拿現價、市值或損益充當成本。"
         "4) 同一檔股票出現多筆交易紀錄時，請「逐筆分開輸出」，每一列交易就是一個 JSON 物件——"
         "不要合併、不要加總、不要自行計算平均（彙總由系統處理，你只負責忠實抄錄每一列）。"
-        "5) 忽略非股票列（表頭、合計、日期列）。看不出任何股票就輸出 []。"
+        "5) date 填該列的成交/買進日期並轉為 YYYY-MM-DD 格式；截圖上沒有日期就填 null。"
+        "6) 忽略非股票列（表頭、合計列）。看不出任何股票就輸出 []。"
     )
 
     def extract_holdings_from_image(self, image_bytes: bytes, fmt: str) -> list:
@@ -382,11 +383,17 @@ class LLMService:
         for item in data:
             if not isinstance(item, dict) or not item.get("name"):
                 continue
+            date = None
+            if item.get("date"):
+                d = str(item["date"]).replace("/", "-").strip()[:10]
+                if _re.match(r"^\d{4}-\d{2}-\d{2}$", d):
+                    date = d
             out.append({
                 "name": str(item.get("name", "")).strip(),
                 "stock_id": str(item["stock_id"]).strip() if item.get("stock_id") else None,
                 "shares": int(item["shares"]) if item.get("shares") else None,
                 "cost": float(item["cost"]) if item.get("cost") else None,
+                "buy_date": date,
             })
         return out
 
